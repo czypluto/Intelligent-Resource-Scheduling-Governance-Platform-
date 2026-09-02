@@ -1,0 +1,34 @@
+# 环境与密钥
+.env
+*.local
+
+# Java
+backend-java/target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# Python
+backend-python/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+frontend-vue/node_modules/
+frontend-vue/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 运行时数据
+*.log
+milvus_data/
+mysql_data/
