@@ -26,6 +26,13 @@ def _event(kind: str, text: str, task: str = "agent") -> dict:
     return {"kind": kind, "text": text, "model": config.resolve_model(task)}
 
 
+def _denied_text(reason: str) -> str:
+    """Java 的原因自带句号，避免拼接后出现双句号。"""
+    reason = (reason or "权限不足").strip()
+    reason = reason.rstrip("。").rstrip(".")
+    return f"无法为您预约：{reason}。"
+
+
 class AgentService:
     def __init__(self) -> None:
         self._rag: Optional[RagStore] = None
@@ -120,7 +127,7 @@ class AgentService:
             yield _event("error", f"权限校验失败：{e}")
             return
         if not decision.get("allowed"):
-            yield _event("denied", f"无法为您预约：{decision.get('reason') or '权限不足'}。")
+            yield _event("denied", _denied_text(decision.get("reason")))
             return
         same_type = [r for r in resources if r.get("type") == rtype]
         if len(same_type) == 1:
@@ -148,7 +155,7 @@ class AgentService:
             yield _event("error", f"权限校验失败：{e}")
             return
         if not decision.get("allowed"):
-            yield _event("denied", f"无法为您预约：{decision.get('reason') or '权限不足'}。")
+            yield _event("denied", _denied_text(decision.get("reason")))
             return
 
         # 抢票（Java 内部再走限流/幂等/扣库存）

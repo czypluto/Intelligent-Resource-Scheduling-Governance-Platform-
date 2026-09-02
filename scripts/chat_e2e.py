@@ -3,13 +3,15 @@
 用法：.venv/Scripts/python ../scripts/chat_e2e.py  （前置：Java/Python 已起、.env 有 key）
 """
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 import httpx
 
-JAVA = "http://127.0.0.1:8080"
+# JAVA_BASE 可用环境变量覆盖（如 Python 跑在 WSL 时指向 Windows 网关）
+JAVA = os.environ.get("JAVA_BASE", "http://127.0.0.1:8080")
 PY = "http://127.0.0.1:8000"
 
 
