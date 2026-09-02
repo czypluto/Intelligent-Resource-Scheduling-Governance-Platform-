@@ -31,3 +31,4 @@ bash scripts/reset-demo.sh
 - Python 从根目录 `.env` 读配置（含 `DEEPSEEK_API_KEY` 与模型路由）。Java 用环境变量，默认值与 infra 一致即可。
 - 模型路由：`/api/health` 会返回当前任务→模型映射。dev=pro，上线把 `MODEL_AGENT/MODEL_MULTIMODAL` 指到 `deepseekv4flash`。
 - DeepSeek 官方 model id 带连字符（`deepseek-v4-pro` / `deepseek-v4-flash`），通过 `.env` 的 `MODEL_ID_*` 映射。
+- 运行拓扑：Java 在 Windows（8080）；Python 主服务与嵌入服务(8001)在 WSL，`--host 0.0.0.0` 绑定，前端自动经 WSL IP 访问。停 WSL 里的 Python：`wsl -e pkill -f "uvicorn app.main"`（停嵌入：`pkill -f app.embed.server`）。`stop-dev.sh` 只停 Windows 侧端口。

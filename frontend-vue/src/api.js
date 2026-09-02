@@ -15,7 +15,7 @@ export function getToken() {
 
 /** Java 登录，返回 data: { token, name, department, position, ... } */
 export async function login(username, password) {
-  const resp = await fetch('/java-api/auth/login', {
+  const resp = await fetch('/java-api/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password })
@@ -34,7 +34,7 @@ export async function login(username, password) {
 export function chatStream(message, token, onEvent, onDone) {
   const controller = new AbortController()
 
-  fetch('/py-api/chat', {
+  fetch('/py-api/api/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

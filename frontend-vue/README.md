@@ -17,7 +17,7 @@ npm run dev
 ## 代理
 
 `vite.config.js`：
-- `/java-api/*` -> Java 8080（去前缀）
-- `/py-api/*`   -> Python 8000（去前缀）
+- `/java-api/*` -> Java 8080（去前缀，Java 在 Windows 本机）
+- `/py-api/*`   -> Python 8000（去前缀，Python 端在 WSL）
 
-两个后端若跑在 WSL2，Windows 侧通过 localhost 访问；联调细节见 `../scripts/README.md`。
+Python 端跑在 WSL2（NAT），`vite` 启动时自动用 `wsl hostname -I` 取 WSL 的 IP 作为 `/py-api` 目标；前端也跑在 WSL 内或想手工指定时，设 `PY_BASE=http://127.0.0.1:8000` 覆盖。联调细节见 `../scripts/README.md`。
