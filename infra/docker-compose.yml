@@ -1,0 +1,34 @@
+# 在 WSL2 内执行：docker compose up -d
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: resv-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: resv-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: resv
+      MYSQL_USER: resv
+      MYSQL_PASSWORD: resv123
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mysql-data:
