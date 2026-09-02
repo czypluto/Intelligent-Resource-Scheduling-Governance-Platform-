@@ -46,9 +46,10 @@ MODEL_IDS: dict[str, str] = {}
 for alias in set(TASK_MODEL.values()):
     MODEL_IDS[alias] = os.getenv(f"MODEL_ID_{alias.upper()}", _CANONICAL_IDS.get(alias, alias))
 
-# 本地 embedding（vLLM 独立端口，OpenAI 兼容）
+# 本地 embedding（独立进程 8001，OpenAI 兼容 /v1/embeddings）
 EMBED_BASE = os.getenv("EMBED_BASE", "http://127.0.0.1:8001")
-EMBED_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.5B")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
+EMBED_MODEL_DIR = os.getenv("EMBED_MODEL_DIR", "")
 EMBED_MAX_LEN = int(os.getenv("EMBEDDING_MAX_LEN", "2048"))
 
 RAG_DB = ROOT / "data" / "rag.db"

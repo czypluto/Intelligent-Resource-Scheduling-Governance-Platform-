@@ -84,6 +84,7 @@ class RagStore:
 
         name = "small"
         if self._client.has_collection(name):
+            self._client.load_collection(name)
             self._collection = name
             return
         schema = self._client.create_schema(auto_id=True, enable_dynamic_field=False)

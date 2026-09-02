@@ -98,7 +98,7 @@ class AgentService:
                 answer = await llm.chat(
                     task="gen",
                     messages=[
-                        {"role": "system", "content": "依据资料回答，无法确认的明说不清楚。"},
+                        {"role": "system", "content": "严格依据资料回答：资料里有的数字/条件直接给出，不要模糊成“以系统为准”；资料里没有的明说未查到。"},
                         {"role": "user", "content": f"资料：\n{chr(10).join(context)}\n\n问题：{user_text}"},
                     ],
                 )

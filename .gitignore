@@ -32,3 +32,5 @@ Thumbs.db
 *.log
 milvus_data/
 mysql_data/
+backend-python/data/rag.db
+backend-python/wsl-uvicorn.log

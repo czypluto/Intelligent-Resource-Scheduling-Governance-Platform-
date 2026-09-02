@@ -45,3 +45,17 @@ uvicorn app.main:app --port 8000
 
 - 权限结论以 Java 规则表为准（`/api/perms/check`），模型只做解释。
 - RAG 依赖未就绪时自动降级，不影响预约主流程。
+
+## RAG 使用（本地嵌入，已启用）
+
+- 嵌入服务：`app/embed/server.py`（torch+transformers 加载 bge-m3，端口 8001，OpenAI 兼容 `/v1/embeddings`）。模型目录由 `EMBED_MODEL_DIR` 指定，当前 `/home/cpluto/models/bge-m3`（ModelScope 下载）。
+- 向量库：Milvus Lite（`data/rag.db`）。注意 **单写者锁**：先灌库再起服务。
+  ```bash
+  # 1) 起嵌入服务（WSL）
+  EMBED_MODEL_DIR=/home/cpluto/models/bge-m3 python3 -m uvicorn app.embed.server:app --port 8001
+  # 2) 起主服务前先灌库（主服务持锁后不能再灌）
+  python3 scripts/rag_test.py      # 或 python3 -m app.rag.ingest
+  # 3) 起主服务
+  uvicorn app.main:app --port 8000
+  ```
+- 检索冒烟：`python3 scripts/rag_query.py "<问题>" <部门>`（仅在主服务未持锁时可用）。
