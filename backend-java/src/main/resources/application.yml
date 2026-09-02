@@ -1,0 +1,45 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: resv-backend
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DB:resv}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:resv}
+    password: ${MYSQL_PASSWORD:resv123}
+    hikari:
+      maximum-pool-size: 20
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      timeout: 3s
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 16
+
+app:
+  jwt:
+    # 与 Python 端共用，HS256，长度需 >= 32 字节
+    secret: ${JWT_SECRET:resv-jwt-secret-change-me-0123456789abcdef}
+    ttl-minutes: ${JWT_TTL_MINUTES:720}
+  redis:
+    prefix: "resv:"
+  seckill:
+    # 令牌桶参数（Redis+Lua，全局限流）
+    qps: ${SECKILL_QPS:1000}
+    burst: ${SECKILL_BURST:2000}
+  stream:
+    order-key: resv:stream:orders
+    order-group: order-g
+    order-consumer: order-c1
+
+logging:
+  level:
+    com.group.resv: info
