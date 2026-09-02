@@ -4,8 +4,10 @@
 
 | 脚本 | 作用 |
 |---|---|
-| `start-dev.sh` | 拉起 Redis/MySQL（docker compose）→ Java(8080) → Python(8000, dev)；首次运行自动建 venv 装依赖。缺 `.env` 时从 `.env.example` 生成并要求填 `DEEPSEEK_API_KEY` |
-| `stop-dev.sh` | 停 Java/Python（保留容器） |
+| `start-all.sh` | **一键启动全部服务**：Redis/MySQL → Java(8080) → WSL 嵌入服务(8001) → WSL Python 主服务(8000) → 前端(5173)。在 Windows Git Bash 里 `bash scripts/start-all.sh` 即可，幂等可重复跑 |
+| `stop-all.sh` | 停全部（前端/Java + WSL Python/嵌入），保留容器 |
+| `start-dev.sh` | 只拉起后端（Redis/MySQL + Java + Python），不启前端与嵌入；首次运行自动建 venv 装依赖 |
+| `stop-dev.sh` | 停 Windows 侧 Java/Python（保留容器） |
 | `reset-demo.sh` | 清订单 + 清 Redis，演示数据回到初始（无需重启 Java） |
 | `e2e_smoke.py` | Java 端到端冒烟（登录/权限/越权拦截/抢票/幂等/落库） |
 | `chat_e2e.py` | 对话链路联调：登录(Java) → Python SSE → 真实 DeepSeek；用法 `python chat_e2e.py <账号> <话>` |
