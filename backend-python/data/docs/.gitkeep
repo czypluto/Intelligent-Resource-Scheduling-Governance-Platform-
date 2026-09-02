@@ -1,0 +1,2 @@
+# 知识文档放这里（*.md），用 `python -m app.rag.ingest` 灌入向量库。
+# 文档可用行内标注部门/职级范围，示例见 README。

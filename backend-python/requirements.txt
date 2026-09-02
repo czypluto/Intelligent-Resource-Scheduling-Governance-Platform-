@@ -1,0 +1,18 @@
+# 基础（FastAPI 服务）
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+python-jose[cryptography]>=3.3
+python-dotenv>=1.0
+
+# 解析文档
+pypdf>=4.0
+python-docx>=1.1
+
+# 可选：RAG（装好后启用本地检索，需 WSL2 内 Python）
+# pymilvus>=2.4
+# numpy>=1.26
+
+# 说明
+# - 模型路由（DeepSeek API）只依赖 httpx，业务代码不出现模型名。
+# - vLLM 提供本地 Qwen3-Embedding 的 OpenAI 兼容接口，Python 侧用 httpx 调 /v1/embeddings。
