@@ -1,0 +1,28 @@
+/* 全站基调：政务蓝为主，克制成份少装饰。 */
+:root {
+  --resv-blue: #1e4e8c;
+  --resv-blue-dark: #173b6b;
+  --resv-bg: #eef1f5;
+  --resv-line: #d5dce5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--resv-bg);
+  color: #2c3a4a;
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
