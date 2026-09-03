@@ -2,7 +2,10 @@
 import { nextTick, reactive, ref } from 'vue'
 import { chatStream, clearToken } from '../api'
 
-const props = defineProps({ user: { type: Object, required: true } })
+const props = defineProps({
+  user: { type: Object, required: true },
+  embedded: { type: Boolean, default: false }
+})
 const emit = defineEmits(['logout'])
 
 const messages = reactive([]) // { role, text, stage, tone, model }
@@ -12,9 +15,9 @@ const listRef = ref(null)
 let abort = null
 
 const QUICK = [
-  '帮我预约总裁班车座位',
-  '现在有哪些会议室可以约',
-  '我能约总裁班车吗'
+  '帮我查明天北京南到上海虹桥的二等座',
+  '儿童票有什么规定',
+  '我有哪些订单'
 ]
 
 function scrollBottom() {
@@ -92,10 +95,10 @@ function logout() {
 
 <template>
   <div class="page">
-    <header class="topbar">
+    <header v-if="!embedded" class="topbar">
       <div class="brand">铁路购票系统</div>
       <div class="user">
-        <span>{{ user.name }}（{{ user.department }} · {{ user.position }}）</span>
+        <span>{{ user.name }}（{{ user.role }}）</span>
         <el-button link type="primary" @click="logout">退出</el-button>
       </div>
     </header>
@@ -116,7 +119,7 @@ function logout() {
             </div>
           </div>
           <div v-if="messages.length === 0" class="empty">
-            请用一句话描述要预约的资源，例如“帮我预约下周一的员工班车”。
+            用一句话描述购票需求，例如“帮我查明天北京到上海的二等座”。
           </div>
         </div>
 
@@ -130,7 +133,7 @@ function logout() {
             type="textarea"
             :rows="2"
             :disabled="sending"
-            placeholder="输入预约需求，Enter 发送，Shift+Enter 换行"
+            placeholder="输入查票/购票需求，Enter 发送，Shift+Enter 换行"
             resize="none"
             @keydown="onKeydown"
           />

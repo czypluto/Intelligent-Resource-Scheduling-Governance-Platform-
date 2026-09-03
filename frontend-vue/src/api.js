@@ -1,5 +1,19 @@
-// 与两个后端的通信。Java 登录，Python 对话（SSE）。
+// 与两个后端的通信。Java 登录/购票，Python 对话（SSE）。
 const TOKEN_KEY = 'resv_token'
+
+async function jfetch(path, options = {}) {
+  const resp = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getToken()}`,
+      ...(options.headers || {})
+    }
+  })
+  const body = await resp.json()
+  if (body.code !== 0) throw new Error(body.msg || '请求失败')
+  return body.data
+}
 
 export function saveToken(token) {
   localStorage.setItem(TOKEN_KEY, token)
@@ -81,4 +95,39 @@ export function chatStream(message, token, onEvent, onDone) {
     .finally(onDone)
 
   return () => controller.abort()
+}
+
+// ---------- 铁路购票（Java） ----------
+
+export async function listStations(kw = '') {
+  return jfetch(`/java-api/api/rail/stations${kw ? `?kw=${encodeURIComponent(kw)}` : ''}`)
+}
+
+export async function queryTickets(from, to, date, seatClass = '') {
+  const p = new URLSearchParams({ from, to, date })
+  if (seatClass) p.set('seatClass', seatClass)
+  return jfetch(`/java-api/api/ticket/query?${p.toString()}`)
+}
+
+export async function buyTicket({ tripId, seatClass, fromStationId, toStationId, contactId = null }) {
+  return jfetch('/java-api/api/ticket/buy', {
+    method: 'POST',
+    body: JSON.stringify({ tripId, seatClass, fromStationId, toStationId, contactId })
+  })
+}
+
+export async function myOrders() {
+  return jfetch('/java-api/api/ticket/orders/my')
+}
+
+export async function payOrder(requestId) {
+  return jfetch(`/java-api/api/ticket/orders/${requestId}/pay`, { method: 'POST' })
+}
+
+export async function cancelOrder(requestId) {
+  return jfetch(`/java-api/api/ticket/orders/${requestId}/cancel`, { method: 'POST' })
+}
+
+export async function listContacts() {
+  return jfetch('/java-api/api/user/contacts')
 }
