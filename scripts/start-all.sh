@@ -17,23 +17,37 @@ wait_up() { # wait_up <秒> <命令...>
   return 1
 }
 
-# 0) Docker 引擎：未运行则自动拉起 Docker Desktop
+# 0) Docker 引擎：未运行则自动拉起 Docker Desktop，带进度等待 + 二次重试
 ensure_docker() {
   docker info >/dev/null 2>&1 && { info "Docker 引擎就绪"; return 0; }
-  info "Docker 引擎未运行，尝试启动 Docker Desktop…"
+
   local exe="" la="${LOCALAPPDATA:-}" pf="${PROGRAMFILES:-/c/Program Files}"
   for c in \
     "$la/Programs/DockerDesktop/Docker Desktop.exe" \
     "$pf/Docker/Docker/Docker Desktop.exe"; do
     [ -f "$c" ] && { exe="$c"; break; }
   done
-  if [ -n "$exe" ]; then
+  if [ -z "$exe" ]; then
+    info "未找到 Docker Desktop，请手动启动后重跑。"
+    return 1
+  fi
+
+  # 每次尝试等最多 150s，间隔 3s；最多尝试 2 次（冷启动第一次常偏慢）
+  local attempt el
+  for attempt in 1 2; do
+    info "尝试第 ${attempt} 次启动 Docker Desktop…"
     powershell -NoProfile -Command "Start-Process -FilePath '$exe'" >/dev/null 2>&1
-    for _ in $(seq 1 60); do
+    el=0
+    while [ "$el" -lt 150 ]; do
       docker info >/dev/null 2>&1 && { info "Docker 引擎就绪"; return 0; }
       sleep 3
+      el=$((el + 3))
+      if [ $((el % 30)) -eq 0 ]; then info "Docker 引擎启动中…已等待 ${el}s"; fi
     done
-  fi
+    info "等待超时，将再次尝试启动 Docker Desktop…"
+    sleep 3
+  done
+
   info "Docker 引擎仍不可用。请手动启动 Docker Desktop 后重跑。"
   return 1
 }
