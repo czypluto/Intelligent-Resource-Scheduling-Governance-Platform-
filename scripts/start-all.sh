@@ -21,10 +21,10 @@ wait_up() { # wait_up <秒> <命令...>
 ensure_docker() {
   docker info >/dev/null 2>&1 && { info "Docker 引擎就绪"; return 0; }
   info "Docker 引擎未运行，尝试启动 Docker Desktop…"
-  local exe=""
+  local exe="" la="${LOCALAPPDATA:-}" pf="${PROGRAMFILES:-/c/Program Files}"
   for c in \
-    "$LOCALAPPDATA/Programs/DockerDesktop/Docker Desktop.exe" \
-    "/c/Program Files/Docker/Docker/Docker Desktop.exe"; do
+    "$la/Programs/DockerDesktop/Docker Desktop.exe" \
+    "$pf/Docker/Docker/Docker Desktop.exe"; do
     [ -f "$c" ] && { exe="$c"; break; }
   done
   if [ -n "$exe" ]; then
@@ -41,11 +41,11 @@ ensure_docker() {
 # 0.5) JAVA_HOME：未设置时自动探测本机 JDK
 ensure_java_home() {
   if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then return 0; fi
-  local d
+  local d la="${LOCALAPPDATA:-}"
   for d in \
     "/c/Program Files/Java"/jdk-* \
     "/c/Program Files/Eclipse Adoptium"/jdk-* \
-    "$LOCALAPPDATA/Programs/Eclipse Adoptium"/jdk-*; do
+    "$la/Programs/Eclipse Adoptium"/jdk-*; do
     if [ -x "$d/bin/java.exe" ]; then
       export JAVA_HOME="$d"
       info "探测到 JAVA_HOME=$d"
