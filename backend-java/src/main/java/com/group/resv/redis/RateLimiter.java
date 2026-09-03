@@ -33,7 +33,7 @@ public class RateLimiter {
 
     /** true=放行；false=触发限流。name 用于区分不同接口的桶。 */
     public boolean allow(String name) {
-        String key = ResvKeys.rate(name);
+        String key = "resv:rate:" + name;
         Long r = redis.execute(script, List.of(key),
                 String.valueOf(capacity), String.valueOf(rate),
                 String.valueOf(System.currentTimeMillis()), String.valueOf(ttlMillis));
