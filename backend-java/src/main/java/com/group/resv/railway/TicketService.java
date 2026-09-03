@@ -1,0 +1,323 @@
+package com.group.resv.railway;
+
+import com.group.resv.common.BizException;
+import com.group.resv.domain.Contact;
+import com.group.resv.domain.User;
+import com.group.resv.railway.domain.Station;
+import com.group.resv.railway.domain.TicketOrder;
+import com.group.resv.railway.domain.Train;
+import com.group.resv.railway.domain.TrainStop;
+import com.group.resv.railway.domain.Trip;
+import com.group.resv.railway.domain.TripClass;
+import com.group.resv.railway.repo.StationRepository;
+import com.group.resv.railway.repo.TicketOrderRepository;
+import com.group.resv.railway.repo.TrainRepository;
+import com.group.resv.railway.repo.TrainStopRepository;
+import com.group.resv.railway.repo.TripClassRepository;
+import com.group.resv.railway.repo.TripRepository;
+import com.group.resv.redis.RateLimiter;
+import com.group.resv.repo.ContactRepository;
+import com.group.resv.repo.UserRepository;
+import com.group.resv.security.AuthUser;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * 购票主流程：余票查询 -> 下单(限流/防重/原子扣减) -> Stream 异步落库 -> 支付/退票。
+ * 高并发亮点全部在这里：Redis Lua 扣减 + Redisson 防重 + Redis Stream 削峰。
+ */
+@Service
+public class TicketService {
+
+    private static final Logger log = LoggerFactory.getLogger(TicketService.class);
+
+    private final TripRepository tripRepository;
+    private final TrainRepository trainRepository;
+    private final TrainStopRepository trainStopRepository;
+    private final StationRepository stationRepository;
+    private final TripClassRepository tripClassRepository;
+    private final TicketOrderRepository orderRepository;
+    private final ContactRepository contactRepository;
+    private final UserRepository userRepository;
+    private final RailwayStockService stockService;
+    private final StringRedisTemplate redis;
+    private final RedissonClient redisson;
+    private final RateLimiter rateLimiter;
+
+    public TicketService(TripRepository tripRepository,
+                         TrainRepository trainRepository,
+                         TrainStopRepository trainStopRepository,
+                         StationRepository stationRepository,
+                         TripClassRepository tripClassRepository,
+                         TicketOrderRepository orderRepository,
+                         ContactRepository contactRepository,
+                         UserRepository userRepository,
+                         RailwayStockService stockService,
+                         StringRedisTemplate redis,
+                         RedissonClient redisson,
+                         RateLimiter rateLimiter) {
+        this.tripRepository = tripRepository;
+        this.trainRepository = trainRepository;
+        this.trainStopRepository = trainStopRepository;
+        this.stationRepository = stationRepository;
+        this.tripClassRepository = tripClassRepository;
+        this.orderRepository = orderRepository;
+        this.contactRepository = contactRepository;
+        this.userRepository = userRepository;
+        this.stockService = stockService;
+        this.redis = redis;
+        this.redisson = redisson;
+        this.rateLimiter = rateLimiter;
+    }
+
+    // ---------- 余票查询 ----------
+
+    public List<Map<String, Object>> query(Long fromId, Long toId, LocalDate date, String seatClass) {
+        if (fromId == null || toId == null || date == null) {
+            throw new BizException(400, "起止站与日期必填");
+        }
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Trip trip : tripRepository.findByTravelDateOrderByTravelDateAsc(date)) {
+            if (!"OPEN".equals(trip.getStatus())) continue;
+            Train train = trainRepository.findById(trip.getTrainId()).orElse(null);
+            List<TrainStop> stops = trainStopRepository.findByTrainIdOrderBySeqAsc(trip.getTrainId());
+            int fromIdx = indexOfStation(stops, fromId);
+            int toIdx = indexOfStation(stops, toId);
+            if (fromIdx < 0 || toIdx <= fromIdx) continue;
+
+            List<TripClass> classes = seatClass == null || seatClass.isBlank()
+                    ? tripClassRepository.findByTripIdOrderByIdAsc(trip.getId())
+                    : tripClassRepository.findByTripIdAndSeatClass(trip.getId(), seatClass).stream().toList();
+            for (TripClass tc : classes) {
+                Map<String, Object> m = new HashMap<>();
+                m.put("tripId", trip.getId());
+                m.put("trainCode", train == null ? null : train.getCode());
+                m.put("travelDate", trip.getTravelDate());
+                m.put("from", name(stops.get(fromIdx).getStationId()));
+                m.put("to", name(stops.get(toIdx).getStationId()));
+                m.put("departTime", stops.get(fromIdx).getDepartTime());
+                m.put("arriveTime", stops.get(toIdx).getArriveTime());
+                m.put("seatClass", tc.getSeatClass());
+                m.put("priceCents", tc.getPriceCents());
+                m.put("remaining", stockService.remaining(trip.getId(), tc.getSeatClass()));
+                out.add(m);
+            }
+        }
+        return out;
+    }
+
+    // ---------- 下单 ----------
+
+    public record BuyRequest(Long tripId, String seatClass, Long fromStationId, Long toStationId,
+                             Long contactId, String requestId) {
+    }
+
+    public Map<String, Object> buy(AuthUser user, BuyRequest req) {
+        if (!rateLimiter.allow("ticket-buy")) {
+            throw new BizException(429, "系统繁忙，请稍后重试");
+        }
+        String requestId = req.requestId() == null || req.requestId().isBlank()
+                ? java.util.UUID.randomUUID().toString().replace("-", "")
+                : req.requestId();
+
+        // 幂等：已存在的 requestId 直接返回首次结果
+        Optional<TicketOrder> existed = orderRepository.findByRequestId(requestId);
+        if (existed.isPresent()) {
+            return orderView(existed.get());
+        }
+
+        Trip trip = tripRepository.findById(req.tripId())
+                .orElseThrow(() -> new BizException(404, "车次不存在"));
+        if (!"OPEN".equals(trip.getStatus())) {
+            throw new BizException(400, "该车次已停售");
+        }
+        Train train = trainRepository.findById(trip.getTrainId()).orElse(null);
+        List<TrainStop> stops = trainStopRepository.findByTrainIdOrderBySeqAsc(trip.getTrainId());
+        int fromIdx = indexOfStation(stops, req.fromStationId());
+        int toIdx = indexOfStation(stops, req.toStationId());
+        if (fromIdx < 0 || toIdx <= fromIdx) {
+            throw new BizException(400, "起止站不在该车次停靠顺序内");
+        }
+        TripClass tc = tripClassRepository.findByTripIdAndSeatClass(trip.getId(), req.seatClass())
+                .orElseThrow(() -> new BizException(404, "该席别不存在"));
+
+        // 乘车人：优先常用联系人，否则本人
+        Contact c = req.contactId() == null ? null
+                : contactRepository.findByIdAndUserId(req.contactId(), user.userId()).orElse(null);
+        String passengerName;
+        String passengerId;
+        if (c != null) {
+            passengerName = c.getName();
+            passengerId = c.getIdNo();
+        } else {
+            User u = userRepository.findById(user.userId())
+                    .orElseThrow(() -> new BizException(404, "用户不存在"));
+            passengerName = u.getName();
+            passengerId = u.getIdNo();
+        }
+
+        String orderNo = genOrderNo();
+
+        // Redisson 锁：同 requestId 并发只进一个
+        RLock lock = redisson.getLock("rv:req:" + requestId);
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(0, 5, TimeUnit.SECONDS);
+            if (!locked) {
+                throw new BizException(409, "请勿重复提交");
+            }
+            // 二次查重（锁内）
+            existed = orderRepository.findByRequestId(requestId);
+            if (existed.isPresent()) {
+                return orderView(existed.get());
+            }
+
+            // Lua 原子扣减；未预热先预热一次
+            long left = stockService.decr(trip.getId(), tc.getSeatClass());
+            if (left == -2) {
+                stockService.preheat(trip.getId(), tc.getSeatClass());
+                left = stockService.decr(trip.getId(), tc.getSeatClass());
+            }
+            if (left < 0) {
+                throw new BizException(409, "余票不足");
+            }
+
+            String from = name(stops.get(fromIdx).getStationId());
+            String to = name(stops.get(toIdx).getStationId());
+            // 写 Stream，异步落库（削峰）
+            redis.opsForStream().add(RailwayKeys.orderStream(), Map.of(
+                    "requestId", requestId,
+                    "orderNo", orderNo,
+                    "userId", String.valueOf(user.userId()),
+                    "tripId", String.valueOf(trip.getId()),
+                    "seatClass", tc.getSeatClass(),
+                    "from", from,
+                    "to", to,
+                    "passengerName", passengerName,
+                    "passengerId", passengerId == null ? "" : passengerId,
+                    "priceCents", String.valueOf(tc.getPriceCents())));
+
+            log.info("购票受理 requestId={} trip={} class={} {}->{} user={}",
+                    requestId, trip.getId(), tc.getSeatClass(), from, to, user.userId());
+
+            Map<String, Object> m = new HashMap<>();
+            m.put("orderNo", orderNo);
+            m.put("requestId", requestId);
+            m.put("status", TicketOrder.PENDING);
+            m.put("message", "座位已锁定，请及时支付");
+            if (train != null) {
+                m.put("trainCode", train.getCode());
+            }
+            m.put("seatClass", tc.getSeatClass());
+            m.put("priceCents", tc.getPriceCents());
+            m.put("from", from);
+            m.put("to", to);
+            return m;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BizException(500, "系统繁忙");
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    // ---------- 支付（简化，模拟支付回调） ----------
+
+    @Transactional
+    public Map<String, Object> pay(String requestId, Long userId) {
+        TicketOrder order = owned(requestId, userId);
+        if (TicketOrder.CANCELLED.equals(order.getStatus())) {
+            throw new BizException(400, "订单已取消，无法支付");
+        }
+        if (!TicketOrder.PAID.equals(order.getStatus())) {
+            order.setStatus(TicketOrder.PAID);
+            order.setPaidAt(LocalDateTime.now());
+            orderRepository.save(order);
+        }
+        return orderView(order);
+    }
+
+    // ---------- 退票 ----------
+
+    @Transactional
+    public Map<String, Object> cancel(String requestId, Long userId) {
+        TicketOrder order = owned(requestId, userId);
+        if (TicketOrder.CANCELLED.equals(order.getStatus())) {
+            return orderView(order); // 幂等
+        }
+        order.setStatus(TicketOrder.CANCELLED);
+        order.setCancelledAt(LocalDateTime.now());
+        orderRepository.save(order);
+        stockService.release(order.getTripId(), order.getSeatClass());
+        log.info("退票 requestId={} 余票已回补", requestId);
+        return orderView(order);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> myOrders(Long userId) {
+        return orderRepository.findByUserIdOrderByIdDesc(userId).stream().map(this::orderView).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getByRequest(String requestId, Long userId) {
+        return orderView(owned(requestId, userId));
+    }
+
+    private TicketOrder owned(String requestId, Long userId) {
+        return orderRepository.findByRequestId(requestId)
+                .filter(o -> o.getUserId().equals(userId))
+                .orElseThrow(() -> new BizException(404, "订单不存在"));
+    }
+
+    private Map<String, Object> orderView(TicketOrder o) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", o.getId());
+        m.put("orderNo", o.getOrderNo());
+        m.put("requestId", o.getRequestId());
+        m.put("tripId", o.getTripId());
+        m.put("seatClass", o.getSeatClass());
+        m.put("from", o.getFromStation());
+        m.put("to", o.getToStation());
+        m.put("passengerName", o.getPassengerName());
+        m.put("priceCents", o.getPriceCents());
+        m.put("status", o.getStatus());
+        m.put("createdAt", o.getCreatedAt());
+        m.put("paidAt", o.getPaidAt());
+        return m;
+    }
+
+    private int indexOfStation(List<TrainStop> stops, Long stationId) {
+        for (int i = 0; i < stops.size(); i++) {
+            if (stops.get(i).getStationId().equals(stationId)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String name(Long stationId) {
+        return stationRepository.findById(stationId).map(Station::getName).orElse(String.valueOf(stationId));
+    }
+
+    private String genOrderNo() {
+        return "T" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+                + (1000 + ThreadLocalRandom.current().nextInt(9000));
+    }
+}

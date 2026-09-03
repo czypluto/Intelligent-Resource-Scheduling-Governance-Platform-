@@ -1,4 +1,4 @@
--- 集团智能资源预约与管控中台 - 建表脚本（MySQL 8）
+-- 铁路购票系统 - 建表脚本（MySQL 8）
 -- 数据由 Java 端 DataInitializer 在空表时播种演示数据。
 
 CREATE TABLE IF NOT EXISTS sys_user (

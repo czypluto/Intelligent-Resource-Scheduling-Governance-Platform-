@@ -36,7 +36,7 @@ async function submit() {
 <template>
   <div class="login-wrap">
     <div class="login-card">
-      <div class="login-title">集团资源预约与管控平台</div>
+      <div class="login-title">铁路购票系统</div>
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="账号">
           <el-input v-model="form.username" placeholder="请输入账号" autocomplete="username" />

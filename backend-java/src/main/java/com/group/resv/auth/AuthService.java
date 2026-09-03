@@ -8,6 +8,8 @@ import com.group.resv.security.JwtUtil;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+
 @Service
 public class AuthService {
 
@@ -31,5 +33,20 @@ public class AuthService {
                 user.getDepartment(), user.getPosition(), user.getRole());
         return new LoginResponse(jwtUtil.generate(identity), user.getId(), user.getUsername(),
                 user.getName(), user.getDepartment(), user.getPosition(), user.getRole());
+    }
+
+    /** 注册并直接登录。后续可由 Agent 据此做“身份识别”。 */
+    public LoginResponse register(RegisterRequest req) {
+        if (userRepository.findByUsername(req.username()).isPresent()) {
+            throw new BizException(409, "用户名已存在");
+        }
+        User u = new User();
+        u.setUsername(req.username());
+        u.setPassword(passwordEncoder.encode(req.password()));
+        u.setName(req.name());
+        u.setRole("EMPLOYEE");
+        u.setCreatedAt(LocalDateTime.now());
+        userRepository.save(u);
+        return login(new LoginRequest(req.username(), req.password()));
     }
 }

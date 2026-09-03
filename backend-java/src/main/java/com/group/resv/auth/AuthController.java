@@ -20,4 +20,9 @@ public class AuthController {
     public ApiResult<LoginResponse> login(@RequestBody LoginRequest request) {
         return ApiResult.ok(authService.login(request));
     }
+
+    @PostMapping("/register")
+    public ApiResult<LoginResponse> register(@RequestBody RegisterRequest request) {
+        return ApiResult.ok(authService.register(request));
+    }
 }

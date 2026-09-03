@@ -40,6 +40,18 @@ public class User {
     @Column(length = 64)
     private String position;
 
+    /** 年龄（购票系统保留字段，为后续 Agent 身份识别提供基础） */
+    private Integer age;
+
+    @Column(length = 8)
+    private String gender;
+
+    @Column(name = "id_type", length = 16)
+    private String idType;
+
+    @Column(name = "id_no", length = 32)
+    private String idNo;
+
     @Column(length = 32)
     private String role;
 

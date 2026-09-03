@@ -93,7 +93,7 @@ function logout() {
 <template>
   <div class="page">
     <header class="topbar">
-      <div class="brand">集团资源预约与管控平台</div>
+      <div class="brand">铁路购票系统</div>
       <div class="user">
         <span>{{ user.name }}（{{ user.department }} · {{ user.position }}）</span>
         <el-button link type="primary" @click="logout">退出</el-button>
