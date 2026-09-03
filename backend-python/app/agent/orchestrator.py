@@ -1,11 +1,11 @@
-"""对话编排。逐步产出事件（kind/text/model），由路由层转成 SSE。
+"""Agent 调度中心（铁路购票）：自然语言 -> Java 接口参数。
 
-流程（与 docs/技术方案-v2.md §7.2 一致）：
-  意图识别 -> 查资源 -> 权限确定性校验(Java) -> 抢票(Java) -> 结果
-权限结论一律由 Java 规则表给出，模型只做自然语言解释。
+流程：意图识别 -> 参数补全 -> 查票 -> 展示并引导下单 -> 支付/退票。
+纯规则问题（退改签/儿童票/学生票…）走 RAG 知识库；其余走工具调用 Java。
 """
 import logging
 import uuid
+from datetime import date
 from typing import AsyncIterator, Optional
 
 from .. import config, java_client, llm, tools
@@ -15,22 +15,19 @@ from ..rag.store import RagStore, rag_available
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = (
-    "你是集团内部资源预约助手。只做预约、查询与规则解释，不编造权限结论。"
-    "预约用 book_resource（参数 resourceId 必须来自给出的资源列表 id）；"
-    "不确定资源是否可约时先 check_permission。回答简洁、公文化。"
-)
+RULE_HINTS = ("退票", "改签", "儿童", "学生", "票价", "携带", "证件", "规则", "能不能", "什么规定", "手续费")
 
 
 def _event(kind: str, text: str, task: str = "agent") -> dict:
     return {"kind": kind, "text": text, "model": config.resolve_model(task)}
 
 
-def _denied_text(reason: str) -> str:
-    """Java 的原因自带句号，避免拼接后出现双句号。"""
-    reason = (reason or "权限不足").strip()
-    reason = reason.rstrip("。").rstrip(".")
-    return f"无法为您预约：{reason}。"
+def _system_prompt() -> str:
+    return (
+        "你是铁路购票助手。今天是%s。查询用 query_tickets（站名+日期），下单用 buy_ticket（tripId 来自查询结果），"
+        "用户要查自己的订单用 my_orders。若必要参数缺失（如出发地/日期），直接向用户说明缺什么，不要编造参数。"
+        "涉及退改签/儿童/学生等规定的问题不调用工具，直接回答。金额单位是分。说话简洁公文化。" % date.today().isoformat()
+    )
 
 
 class AgentService:
@@ -44,61 +41,114 @@ class AgentService:
 
     async def handle(self, user_text: str) -> AsyncIterator[dict]:
         user = current_user()
-        yield _event("think", f"已收到您的请求，正在为您办理（{user.identity}）。")
+        yield _event("think", f"已收到请求，正在为您办理（{user.identity}）。")
 
         try:
-            resources = await java_client.list_resources()
-        except java_client.JavaError as e:
-            yield _event("error", f"资源服务不可用：{e}")
-            return
+            stations = await java_client.stations()
         except Exception as e:  # noqa: BLE001
-            logger.exception("list_resources 失败")
-            yield _event("error", f"资源服务连接失败：{e}")
-            return
+            logger.exception("车站服务不可用")
+            stations = []
+        station_line = "、".join(s["name"] for s in stations[:30])
 
-        if not resources:
-            yield _event("error", "当前没有可预约资源。")
-            return
-
-        # 意图识别 + 工具决策（模型路由，dev=pro / 上线后 agent=flash）
-        resource_lines = "\n".join(
-            f"- id={r['id']} {r['name']}（类型 {r.get('type')}，余量 {r.get('totalStock')}）"
-            for r in resources
-        )
-        try:
-            out = await llm.chat(
-                task="agent",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"当前可预约资源：\n{resource_lines}\n\n用户请求：{user_text}"},
-                ],
-                tools=tools.all_schemas(),
-            )
-        except LlmError as e:
-            yield _event("error", str(e))
-            return
-
-        # 优先执行下单（_book 自带权限二次校验）；只回权限查询则查询后顺延。
-        book_tc = next((t for t in out.tool_calls if t.name == "book_resource"), None)
-        check_tc = next((t for t in out.tool_calls if t.name == "check_permission"), None)
-        if book_tc is not None:
-            async for ev in self._book(resources, book_tc.arg_dict()):
-                yield ev
-            return
-        if check_tc is not None:
-            async for ev in self._permission_first(resources, check_tc.arg_dict()):
+        # 规则类问题直接走知识库，避免空转调用工具
+        if any(h in user_text for h in RULE_HINTS):
+            async for ev in self._rule_answer(user_text):
                 yield ev
             return
 
-        # 无工具调用：问答收尾（有 RAG 则带上下文，否则直接答）
+        msgs = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": f"已知车站：{station_line}\n\n用户请求：{user_text}"},
+        ]
+
+        rounds = 0
+        shown = False
+        while rounds < 4:
+            rounds += 1
+            try:
+                out = await llm.chat(task="agent", messages=msgs, tools=tools.all_schemas())
+            except LlmError as e:
+                yield _event("error", str(e))
+                return
+
+            if not out.tool_calls:
+                if shown:
+                    # 已给出工具结果，直接收尾，不再当规则问题处理
+                    yield _event("answer", "以上是办理结果。如需继续下单/支付/退票，直接告诉我即可。")
+                else:
+                    async for ev in self._rule_answer(user_text):
+                        yield ev
+                return
+
+            acted = False
+            for tc in out.tool_calls:
+                name, args = tc.name, tc.arg_dict()
+                try:
+                    if name == "query_tickets":
+                        rows = await java_client.query_tickets(
+                            args.get("from", ""), args.get("to", ""),
+                            args.get("date", date.today().isoformat()),
+                            args.get("seatClass"))
+                        shown = True
+                        acted = True
+                        text = self._query_text(rows)
+                        msgs.append({"role": "assistant", "content": f"查票结果：\n{text}"})
+                        yield _event("result", text)
+                    elif name == "buy_ticket":
+                        r = await java_client.buy_ticket(
+                            int(args["tripId"]), args["seatClass"], args["from"], args["to"])
+                        shown = True
+                        acted = True
+                        line = (f"下单成功：车票 {r.get('from')}->{r.get('to')} "
+                                f"{r.get('seatClass')}，金额 {r.get('priceCents')}分，状态 {r.get('status')}，"
+                                f"订单号 {r.get('orderNo')}。requestId={r.get('requestId')}")
+                        msgs.append({"role": "assistant", "content": line})
+                        yield _event("result", line)
+                    elif name == "my_orders":
+                        rows = await java_client.my_orders()
+                        shown = True
+                        acted = True
+                        text = self._orders_text(rows)
+                        msgs.append({"role": "assistant", "content": f"我的订单：\n{text}"})
+                        yield _event("result", text)
+                    elif name == "pay_ticket":
+                        rid = args["requestId"]
+                        r = await java_client.pay(rid)
+                        shown = True
+                        acted = True
+                        line = f"订单 {rid} 已支付，状态 {r.get('status')}"
+                        msgs.append({"role": "assistant", "content": line})
+                        yield _event("result", line)
+                    elif name == "cancel_ticket":
+                        rid = args["requestId"]
+                        r = await java_client.cancel(rid)
+                        shown = True
+                        acted = True
+                        line = f"订单 {rid} 已退票，状态 {r.get('status')}，余票已回补"
+                        msgs.append({"role": "assistant", "content": line})
+                        yield _event("result", line)
+                except java_client.JavaError as e:
+                    yield _event("error", f"{e.msg}")
+                    return
+
+            if not acted:
+                break
+
+            # 是否还需要继续（如查完票再下单）：再问一次模型，让它决定收尾还是下单
+            msgs.append({"role": "user",
+                         "content": "基于以上结果：如果还需继续就调用下一个工具；已完事则仅用一句话回复用户。"})
+        # 循环结束：给一句收尾（兜底）
+        yield _event("answer", "已为您办理。需要支付或退票时告诉我订单号即可。")
+
+    async def _rule_answer(self, user_text: str) -> AsyncIterator[dict]:
         rag = self._rag_store()
-        context = await rag.retrieve(user_text, department=user.department) if rag and rag.enabled else []
+        context = await rag.retrieve(user_text, department=current_user().department) if rag and rag.enabled else []
         try:
             if context:
                 answer = await llm.chat(
                     task="gen",
                     messages=[
-                        {"role": "system", "content": "严格依据资料回答：资料里有的数字/条件直接给出，不要模糊成“以系统为准”；资料里没有的明说未查到。"},
+                        {"role": "system", "content": "严格依据资料回答：有明确数字/条件就直说，没有的明说未查到。"},
                         {"role": "user", "content": f"资料：\n{chr(10).join(context)}\n\n问题：{user_text}"},
                     ],
                 )
@@ -106,65 +156,31 @@ class AgentService:
                 answer = await llm.chat(
                     task="gen",
                     messages=[
-                        {"role": "system", "content": "你是集团资源助手，简述如何预约即可，不要编造细则。"},
+                        {"role": "system", "content": "你是铁路售票助手，不知道的别编，引导用户查看官网或客服。"},
                         {"role": "user", "content": user_text},
                     ],
                 )
         except LlmError as e:
-            yield _event("error", str(e))
+            yield _event("error", str(e), "gen")
             return
-        yield _event("answer", answer.content, task="gen")
+        yield _event("answer", answer.content, "gen")
 
-    async def _permission_first(self, resources, args) -> AsyncIterator[dict]:
-        rtype = args.get("resourceType")
-        if not rtype:
-            yield _event("answer", "请说明要预约哪类资源。")
-            return
-        yield _event("check", "正在校验您的预约权限…")
-        try:
-            decision = await java_client.check_permission(rtype)
-        except java_client.JavaError as e:
-            yield _event("error", f"权限校验失败：{e}")
-            return
-        if not decision.get("allowed"):
-            yield _event("denied", _denied_text(decision.get("reason")))
-            return
-        same_type = [r for r in resources if r.get("type") == rtype]
-        if len(same_type) == 1:
-            async for ev in self._book(resources, {"resourceId": same_type[0]["id"]}):
-                yield ev
-        else:
-            names = "、".join(r["name"] for r in same_type) if same_type else "（无）"
-            yield _event("answer", f"您有该类资源权限。当前该类资源有：{names}。请告知预约哪一项。")
+    @staticmethod
+    def _query_text(rows: list[dict]) -> str:
+        if not rows:
+            return "该区间当日无可用车次或余票。"
+        lines = []
+        for r in rows:
+            lines.append(f"- tripId={r['tripId']} {r['trainCode']} {r['from']}->{r['to']} "
+                         f"{r['departTime']}-{r['arriveTime']} {r['seatClass']} "
+                         f"{r['priceCents']}分 余{r['remaining']}张")
+        return "\n".join(lines)
 
-    async def _book(self, resources, args) -> AsyncIterator[dict]:
-        resource_id = args.get("resourceId")
-        if not resource_id:
-            yield _event("answer", "缺少资源信息，请说明要预约哪个资源。")
-            return
-        target = next((r for r in resources if r["id"] == resource_id), None)
-        if target is None:
-            yield _event("error", "所选资源不在可预约列表内。")
-            return
-
-        # 权限确定性校验（Java 规则表），放行结论不由模型定
-        yield _event("check", f"正在校验您对「{target['name']}」的预约权限…")
-        try:
-            decision = await java_client.check_permission(target["type"])
-        except java_client.JavaError as e:
-            yield _event("error", f"权限校验失败：{e}")
-            return
-        if not decision.get("allowed"):
-            yield _event("denied", _denied_text(decision.get("reason")))
-            return
-
-        # 抢票（Java 内部再走限流/幂等/扣库存）
-        request_id = uuid.uuid4().hex[:32]
-        yield _event("act", "权限通过，正在为您抢票…")
-        try:
-            result = await java_client.book_resource(target["id"], request_id)
-        except java_client.JavaError as e:
-            msg = e.msg if e.code in (409, 429, 400, 403) else f"预约处理失败（{e.code}）：{e.msg}"
-            yield _event("error", msg)
-            return
-        yield _event("result", result.get("message", "预约已提交。"))
+    @staticmethod
+    def _orders_text(rows: list[dict]) -> str:
+        if not rows:
+            return "当前没有订单。"
+        return "\n".join(
+            f"- {o.get('orderNo')} {o.get('from')}->{o.get('to')} {o.get('seatClass')} "
+            f"{o.get('priceCents')}分 {o.get('status')} requestId={o.get('requestId')}"
+            for o in rows)

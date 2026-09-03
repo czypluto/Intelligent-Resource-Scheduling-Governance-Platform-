@@ -1,10 +1,15 @@
-"""调用 Java 交易服务的 REST 客户端。只经 REST，不带工具协议。
+"""调用 Java（铁路购票）的 REST 客户端。执行只走 REST，透传当前用户 Token。
 
-每个调用都透传当前用户 Token，Java 侧二次校验身份与权限。
+对应 Java 能力：
+  查车站 /api/rail/stations
+  查票   /api/ticket/query
+  下单   /api/ticket/buy
+  我的订单/支付/退票  /api/ticket/orders/**
 """
 import json
 import logging
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -35,19 +40,46 @@ async def _call(method: str, path: str, body: Optional[dict] = None) -> Any:
     return payload.get("data")
 
 
-async def list_resources() -> list[dict]:
-    return await _call("GET", "/api/resources") or []
+async def stations(kw: Optional[str] = None) -> list[dict]:
+    qs = "" if not kw else "?" + urlencode({"kw": kw})
+    return await _call("GET", f"/api/rail/stations{qs}") or []
 
 
-async def check_permission(resource_type: str) -> dict:
-    """确定性权限校验，Java 给结论（allowed/reason）。"""
-    return await _call("POST", "/api/perms/check", {"resourceType": resource_type})
+async def query_tickets(from_station: str, to_station: str, date: str, seat_class: Optional[str] = None) -> list[dict]:
+    """按站名/日期查余票（Java 内部按站 id 过滤停站顺序）。"""
+    from_id, to_id = await _resolve_station(from_station), await _resolve_station(to_station)
+    params = {"from": from_id, "to": to_id, "date": date}
+    if seat_class:
+        params["seatClass"] = seat_class
+    rows = await _call("GET", "/api/ticket/query?" + urlencode(params)) or []
+    return rows
 
 
-async def book_resource(resource_id: int, request_id: str) -> dict:
-    """抢票/预约。内部再做限流、幂等、扣库存。"""
-    return await _call("POST", "/api/seckill", {"resourceId": resource_id, "requestId": request_id})
+async def buy_ticket(trip_id: int, seat_class: str, from_station: str, to_station: str) -> dict:
+    from_id, to_id = await _resolve_station(from_station), await _resolve_station(to_station)
+    body = {
+        "tripId": trip_id,
+        "seatClass": seat_class,
+        "fromStationId": from_id,
+        "toStationId": to_id,
+    }
+    return await _call("POST", "/api/ticket/buy", body)
 
 
-async def get_order(request_id: str) -> Optional[dict]:
-    return await _call("GET", f"/api/orders/{request_id}")
+async def my_orders() -> list[dict]:
+    return await _call("GET", "/api/ticket/orders/my") or []
+
+
+async def pay(request_id: str) -> dict:
+    return await _call("POST", f"/api/ticket/orders/{request_id}/pay")
+
+
+async def cancel(request_id: str) -> dict:
+    return await _call("POST", f"/api/ticket/orders/{request_id}/cancel")
+
+
+async def _resolve_station(name: str) -> int:
+    rows = await stations(kw=name)
+    if not rows:
+        raise JavaError(400, f"未找到车站：{name}")
+    return rows[0]["id"]
