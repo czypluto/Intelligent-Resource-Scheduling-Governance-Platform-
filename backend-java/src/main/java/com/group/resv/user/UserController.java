@@ -38,7 +38,7 @@ public class UserController {
 
     // ---------- 个人资料 ----------
 
-    public record ProfileBody(Integer age, String gender, String idType, String idNo) {
+    public record ProfileBody(Integer age, String gender, String idType, String idNo, Boolean student) {
     }
 
     @GetMapping("/profile")
@@ -53,6 +53,7 @@ public class UserController {
         if (body.gender() != null) u.setGender(body.gender());
         if (body.idType() != null) u.setIdType(body.idType());
         if (body.idNo() != null) u.setIdNo(body.idNo());
+        if (body.student() != null) u.setStudent(body.student());
         return ApiResult.ok(userRepository.save(u));
     }
 

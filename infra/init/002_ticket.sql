@@ -109,3 +109,5 @@ ALTER TABLE contact ADD COLUMN age INT DEFAULT NULL COMMENT '年龄(儿童票判
 ALTER TABLE ticket_order
     ADD COLUMN ticket_type VARCHAR(16) NOT NULL DEFAULT 'ADULT' COMMENT 'ADULT/CHILD/STUDENT' AFTER seat_class,
     ADD COLUMN passenger_age INT DEFAULT NULL COMMENT '乘车人年龄快照(儿童票判定)' AFTER passenger_id;
+
+ALTER TABLE sys_user ADD COLUMN student TINYINT(1) DEFAULT NULL COMMENT '是否全日制在校学生' AFTER role;

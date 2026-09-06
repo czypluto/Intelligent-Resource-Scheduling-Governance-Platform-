@@ -9,6 +9,9 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.util.Set;
 
+import static java.time.temporal.ChronoField.DAY_OF_MONTH;
+import static java.time.temporal.ChronoField.MONTH_OF_YEAR;
+
 /**
  * 购票确定性规则（独立于模型的"规则审核层"，集中可读、可单测）。
  * 所有写前置校验都收敛在这里，不在 Controller/Agent 里散落。
@@ -42,6 +45,23 @@ public class TicketPolicy {
     public void ensureChildEligible(Integer age) {
         if (age == null || age < 6 || age >= 14) {
             throw new BizException(400, "儿童票需年满6周岁且未满14周岁（当前年龄无效）");
+        }
+    }
+
+    /** 学生票硬前置：须为学生身份、仅动车二等座、且乘车日在寒暑假窗口（7/1-8/31 或 1/15-2/28）。 */
+    public void ensureStudentEligible(Boolean student, LocalDate travelDate, String seatClass) {
+        if (!Boolean.TRUE.equals(student)) {
+            throw new BizException(400, "学生票需全日制在校学生身份");
+        }
+        if (!"二等座".equals(seatClass)) {
+            throw new BizException(400, "学生票仅限动车组二等座");
+        }
+        int m = travelDate.get(MONTH_OF_YEAR);
+        int d = travelDate.get(DAY_OF_MONTH);
+        boolean summer = m == 7 || (m == 8);
+        boolean winter = (m == 1 && d >= 15) || (m == 2 && d <= 28);
+        if (!summer && !winter) {
+            throw new BizException(400, "学生票限寒暑假期间乘车（7/1-8/31 或 1/15-2/28）");
         }
     }
 

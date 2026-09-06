@@ -191,13 +191,18 @@ public class TicketService {
             passengerAge = u.getAge();
         }
 
-        // 票种前置规则：儿童票须 6-14 周岁（确定性校验），票价半价；默认成人票
+        // 票种前置规则：儿童票 6-14 周岁半价；学生票 学生+二等座+寒暑假 75%价；默认成人票
         String ticketType = req.ticketType() == null || req.ticketType().isBlank()
                 ? "ADULT" : req.ticketType().toUpperCase();
         long priceCents = tc.getPriceCents();
         if ("CHILD".equals(ticketType)) {
             policy.ensureChildEligible(passengerAge);
             priceCents = tc.getPriceCents() / 2;
+        } else if ("STUDENT".equals(ticketType)) {
+            Boolean isStudent = userRepository.findById(user.userId())
+                    .map(User::getStudent).orElse(false);
+            policy.ensureStudentEligible(isStudent, trip.getTravelDate(), tc.getSeatClass());
+            priceCents = tc.getPriceCents() * 75 / 100;
         }
 
         String orderNo = genOrderNo();

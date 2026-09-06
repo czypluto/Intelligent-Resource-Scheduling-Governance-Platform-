@@ -58,6 +58,9 @@ public class User {
     @Column(length = 32)
     private String role;
 
+    /** 是否全日制在校学生（学生票判定） */
+    private Boolean student;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 }
