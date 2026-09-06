@@ -112,6 +112,23 @@ def _load_pdf(path: Path) -> list[Page]:
     return pages
 
 
+def render_page(path: Path, page_index: int, out_png: str, scale: float = 1.6) -> bool:
+    """把 PDF 第 page_index(0 起) 页渲染成 PNG，返回是否成功（供页面图像入向量）。"""
+    try:
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(str(path))
+        page = pdf[page_index]
+        bitmap = page.render(scale=scale)
+        pil_img = bitmap.to_pil()
+        pil_img.save(out_png)
+        pdf.close()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("页渲染失败 page=%s：%s", page_index + 1, e)
+        return False
+
+
 def load_pages(path: Path) -> list[Page]:
     suffix = path.suffix.lower()
     try:
