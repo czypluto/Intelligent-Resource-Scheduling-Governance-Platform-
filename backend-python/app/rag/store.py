@@ -35,7 +35,18 @@ def rag_available() -> bool:
 async def embed_texts(texts: list[str]) -> list[list[float]]:
     url = f"{config.EMBED_BASE}/v1/embeddings"
     payload = {"model": config.EMBED_MODEL, "input": texts[:64]}
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=240) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+    return [item["embedding"] for item in data["data"]]
+
+
+async def embed_texts_images(images: list[str]) -> list[list[float]]:
+    """图片嵌入（WeMM 视觉，需服务端支持 images）。"""
+    url = f"{config.EMBED_BASE}/v1/embeddings"
+    payload = {"model": config.EMBED_MODEL, "images": images}
+    async with httpx.AsyncClient(timeout=240) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -125,6 +136,46 @@ class RagStore:
         if rows:
             self._client.insert(collection_name=self._collection, data=rows)
         return len(rows)
+
+    async def ingest_images(self, files: list[Path]) -> int:
+        """图片多模态入库：WeMM 图像嵌入；同目录同名 .txt 作说明文字一并入库。"""
+        if not self.enabled or not files:
+            return 0
+        rows, pid_base = [], self.count()
+        for i, f in enumerate(files):
+            if f.suffix.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+                continue
+            caption = ""
+            cap = f.with_suffix(".txt")
+            if cap.exists():
+                caption = cap.read_text(encoding="utf-8").strip()
+            vec = (await embed_texts_images([str(f)]))[0]
+            rows.append({
+                "parent_id": pid_base + i + 1,
+                "small_text": ("[图] " + caption)[:500] or "[图]",
+                "parent_text": _clean(caption + (" " if caption else "") + f"[文件 {f.name}]"),
+                "dept_tags": "all",
+                "source": f.name,
+                "page_no": 0,
+                "heading": "[图片]" + (f" {caption[:60]}" if caption else ""),
+                "vector": vec,
+            })
+        if rows:
+            self._client.insert(collection_name=self._collection, data=rows)
+        return len(rows)
+
+    def count(self) -> int:
+        """当前集合记录数（灌库/校验用）。"""
+        if not self.enabled:
+            return 0
+        try:
+            rows = self._client.query(collection_name=self._collection,
+                                      output_fields=["count(*)"], filter="")
+            if rows:
+                return int(rows[0].get("count(*)", 0))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("count 失败：%s", e)
+        return 0
 
     async def retrieve(self, query: str, department: str, top_k: int = 5) -> list[str]:
         """检索小块 -> 按 (source,page) 去重 -> 返回父块文本，并带出处前缀供引用。"""
