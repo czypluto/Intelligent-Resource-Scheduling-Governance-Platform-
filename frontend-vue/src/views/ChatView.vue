@@ -55,11 +55,12 @@ async function send(text) {
       current.tone = 'denied'
     } else if (ev.kind === 'confirm') {
       current.stage = ''
-      current.text = ev.text
+      current.text = current.text ? `${current.text}\n${ev.text}` : ev.text
       current.tone = 'normal'
     } else if (ev.kind === 'result' || ev.kind === 'answer') {
       current.stage = ''
-      current.text = ev.text
+      // 追加而非覆盖，避免后续事件把查询结果冲掉
+      current.text = current.text ? `${current.text}\n${ev.text}` : ev.text
       current.tone = ev.kind === 'result' ? 'success' : 'normal'
     }
     current.model = ev.model || current.model
