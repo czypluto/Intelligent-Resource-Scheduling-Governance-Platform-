@@ -72,18 +72,36 @@ public class TicketOrderConsumer implements ApplicationRunner {
                 List<MapRecord<String, Object, Object>> records = redis.opsForStream()
                         .read(consumer, options,
                                 StreamOffset.create(streamKey, ReadOffset.lastConsumed()));
-                if (records == null) {
-                    continue;
+                if (records != null) {
+                    process(records, consumer);
                 }
-                for (MapRecord<String, Object, Object> r : records) {
-                    handle(r.getValue());
-                    RecordId id = r.getId();
-                    redis.opsForStream().acknowledge(streamKey, group, id);
-                    redis.opsForStream().delete(streamKey, id);
+                // 自动认领重试：处理本消费者遗留的未 ack 消息（前轮落库失败的那些）
+                List<MapRecord<String, Object, Object>> pending = redis.opsForStream()
+                        .read(consumer,
+                                StreamReadOptions.empty().count(20),
+                                StreamOffset.create(streamKey, ReadOffset.from("0")));
+                if (pending != null) {
+                    process(pending, consumer);
                 }
             } catch (Exception e) {
-                log.warn("购票订单消费异常：{}", e.getMessage());
-                sleepQuietly(500);
+                log.error("购票订单消费异常（留 pending 待下轮认领）：{}", e.getMessage());
+                sleepQuietly(1000);
+            }
+        }
+    }
+
+    /** 逐条处理：成功则落库+ack+删除；失败则记录并保留 pending（不 ack），由下轮认领重试。 */
+    private void process(List<MapRecord<String, Object, Object>> records, Consumer consumer) {
+        for (MapRecord<String, Object, Object> r : records) {
+            RecordId id = r.getId();
+            try {
+                handle(r.getValue());
+                redis.opsForStream().acknowledge(streamKey, group, id);
+                redis.opsForStream().delete(streamKey, id);
+            } catch (Exception e) {
+                // 落库失败：不 ack、不删除，等认领重试；同时告警
+                log.error("订单 {} 落库失败，已留 pending 待重试：{}",
+                        r.getValue().get("requestId"), e.getMessage());
             }
         }
     }
