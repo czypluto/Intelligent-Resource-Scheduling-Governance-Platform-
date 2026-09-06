@@ -15,7 +15,7 @@ from ..rag.store import RagStore, rag_available
 
 logger = logging.getLogger(__name__)
 
-RULE_HINTS = ("退票", "改签", "儿童", "学生", "票价", "携带", "证件", "规则", "能不能", "什么规定", "手续费")
+RULE_HINTS = ("退票", "改签", "儿童", "学生", "票价", "携带", "行李", "证件", "规则", "能不能", "什么规定", "手续费")
 
 
 def _event(kind: str, text: str, task: str = "agent") -> dict:

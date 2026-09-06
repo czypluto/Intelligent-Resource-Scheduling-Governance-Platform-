@@ -99,3 +99,8 @@ CREATE TABLE IF NOT EXISTS contact (
 
 -- 按日期查车次需要索引（日期单独过滤时避免全表扫）
 ALTER TABLE trip ADD INDEX idx_trip_date (travel_date);
+
+-- 审计：update_time（DB 端自动维护；已存在库重复执行报 duplicate column 可忽略）
+ALTER TABLE ticket_order ADD COLUMN update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at;
+ALTER TABLE trip         ADD COLUMN update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER status;
+ALTER TABLE trip_class   ADD COLUMN update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER total_seats;
