@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -46,17 +47,36 @@ public class RailwayAdminController {
     private final TrainStopRepository trainStopRepository;
     private final TripRepository tripRepository;
     private final TripClassRepository tripClassRepository;
+    private final AdminConfirmService adminConfirm;
 
     public RailwayAdminController(TrainRepository trainRepository,
                                   StationRepository stationRepository,
                                   TrainStopRepository trainStopRepository,
                                   TripRepository tripRepository,
-                                  TripClassRepository tripClassRepository) {
+                                  TripClassRepository tripClassRepository,
+                                  AdminConfirmService adminConfirm) {
         this.trainRepository = trainRepository;
         this.stationRepository = stationRepository;
         this.trainStopRepository = trainStopRepository;
         this.tripRepository = tripRepository;
         this.tripClassRepository = tripClassRepository;
+        this.adminConfirm = adminConfirm;
+    }
+
+    // ---------- 高危操作二次确认 ----------
+    public record ConfirmBody(String op, Long target) {
+    }
+
+    @PostMapping("/confirm/request")
+    public ApiResult<Map<String, Object>> confirmRequest(@RequestBody ConfirmBody body) {
+        AdminConfirmService.ConfirmTicket t = adminConfirm.issue(body.op(), body.target());
+        return ApiResult.ok(Map.of("token", t.token(), "expiresSeconds", t.expiresSeconds()));
+    }
+
+    private void requireConfirm(String op, Long target, String token) {
+        if (!adminConfirm.verifyAndConsume(op, target, token)) {
+            throw new BizException(403, "高危操作需二次确认：请先 POST /api/rail/confirm/request 获取一次性确认码，并以请求头 X-Confirm-Token 携带");
+        }
     }
 
     // ---------- 车站 ----------
@@ -110,7 +130,9 @@ public class RailwayAdminController {
     }
 
     @DeleteMapping("/trains/{id}")
-    public ApiResult<Void> deleteTrain(@PathVariable Long id) {
+    public ApiResult<Void> deleteTrain(@PathVariable Long id,
+                                       @RequestHeader(value = "X-Confirm-Token", required = false) String confirm) {
+        requireConfirm("deleteTrain", id, confirm);
         // 已有运行记录则拒绝物理删除，避免脏数据
         if (!tripRepository.findByTrainIdOrderByTravelDateDesc(id).isEmpty()) {
             throw new BizException(409, "该车次已有运行记录，不可删除");
@@ -199,7 +221,9 @@ public class RailwayAdminController {
     }
 
     @DeleteMapping("/trips/{id}")
-    public ApiResult<Void> deleteTrip(@PathVariable Long id) {
+    public ApiResult<Void> deleteTrip(@PathVariable Long id,
+                                      @RequestHeader(value = "X-Confirm-Token", required = false) String confirm) {
+        requireConfirm("deleteTrip", id, confirm);
         tripClassRepository.deleteAll(tripClassRepository.findByTripIdOrderByIdAsc(id));
         tripRepository.deleteById(id);
         return ApiResult.ok();
