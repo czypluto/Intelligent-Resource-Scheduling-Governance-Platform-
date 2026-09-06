@@ -3,6 +3,8 @@ package com.group.resv.railway;
 import com.group.resv.common.ApiResult;
 import com.group.resv.railway.domain.TicketOrder;
 import com.group.resv.security.SecurityUtil;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,6 +24,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/ticket")
+@Tag(name = "车票", description = "余票查询 / 购票 / 支付 / 退票 / 我的订单")
 public class TicketController {
 
     private final TicketService ticketService;
@@ -30,6 +33,7 @@ public class TicketController {
         this.ticketService = ticketService;
     }
 
+    @Operation(summary = "余票查询", description = "按起止站与日期查可用车次及席别余票")
     @GetMapping("/query")
     public ApiResult<List<Map<String, Object>>> query(
             @RequestParam Long from,
@@ -39,6 +43,7 @@ public class TicketController {
         return ApiResult.ok(ticketService.query(from, to, date, seatClass));
     }
 
+    @Operation(summary = "购票", description = "锁定库存并生成待支付订单（幂等，同人同车次同席别防重复）")
     @PostMapping("/buy")
     public ApiResult<Map<String, Object>> buy(@Valid @RequestBody TicketService.BuyRequest req) {
         return ApiResult.ok(ticketService.buy(SecurityUtil.current(), req));

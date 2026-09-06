@@ -12,6 +12,7 @@ import com.group.resv.railway.repo.TrainRepository;
 import com.group.resv.railway.repo.TrainStopRepository;
 import com.group.resv.railway.repo.TripClassRepository;
 import com.group.resv.railway.repo.TripRepository;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -36,6 +37,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/rail")
 @PreAuthorize("hasRole('ADMIN')")
+@Tag(name = "铁路资源管理（管理端）", description = "车站 / 列车 / 停站 / 运行日 / 席别，仅 ADMIN")
 @Transactional
 public class RailwayAdminController {
 
