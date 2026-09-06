@@ -51,6 +51,7 @@ public class User {
     @Column(name = "id_type", length = 16)
     private String idType;
 
+    @JsonIgnore
     @Column(name = "id_no", length = 32)
     private String idNo;
 
