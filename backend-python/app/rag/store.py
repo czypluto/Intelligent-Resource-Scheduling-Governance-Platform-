@@ -1,24 +1,24 @@
-"""RAG 存储与检索（Small-to-Big）。
+"""RAG 存储与检索（Small-to-Big，带来源元数据）。
 
-骨架实现说明：
-- 嵌入经本地 /v1/embeddings（bge-m3 CPU 或 WeMM-Embedding-2B int8 GPU），由 app/embed/server.py 分派。
-- 向量维度固定 1024（Matryoshka 截取对齐），如换不同维模型需改 _DIM 并重建集合。
-- 依赖未就绪时 rag_available() 返回 False，Agent 自动降级，不影响主流程。
-- 数据文件在 backend-python/data/。
+- 格式：md / docx / pdf，按 页+语义切片 入库（见 documents.py）
+- 每条记录保留 source / page_no / heading，检索可给出处引用
+- 嵌入经本地 /v1/embeddings（WeMM-Embedding-2B int8 GPU 或 bge-m3 CPU），向量 1024 维
+- 注意：本文件 schema 若升级，需删除 data/rag.db 目录后重灌
 """
 import logging
-import re
 from pathlib import Path
 from typing import Optional
 
 import httpx
 
 from .. import config
+from .documents import chunk_sentences, load_pages
 
 logger = logging.getLogger(__name__)
 
 _available: Optional[bool] = None
 _DIM = 1024
+_PARENT_MAX = 20000
 
 
 def rag_available() -> bool:
@@ -32,36 +32,21 @@ def rag_available() -> bool:
     return _available
 
 
-class EmbedError(Exception):
-    pass
-
-
 async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """调本地嵌入服务的 OpenAI 兼容 /v1/embeddings。"""
     url = f"{config.EMBED_BASE}/v1/embeddings"
     payload = {"model": config.EMBED_MODEL, "input": texts[:64]}
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
     return [item["embedding"] for item in data["data"]]
 
 
-def _split_paragraphs(text: str) -> list[str]:
-    return [p.strip() for p in re.split(r"\n{1,}", text) if p.strip()]
-
-
-def _small_of(paragraph: str) -> str:
-    return paragraph if len(paragraph) <= 256 else paragraph[:256]
-
-
-def _prepare(text: str) -> str:
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+def _clean(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')[: _PARENT_MAX]
 
 
 class RagStore:
-    """Milvus Lite 集合：记录含小块(small_text)与父块(parent_text)，检索按部门标签过滤。"""
-
     def __init__(self) -> None:
         self.enabled = rag_available()
         self._client = None
@@ -91,8 +76,11 @@ class RagStore:
         schema.add_field("id", DataType.INT64, is_primary=True)
         schema.add_field("parent_id", DataType.INT64)
         schema.add_field("small_text", DataType.VARCHAR, max_length=512)
-        schema.add_field("parent_text", DataType.VARCHAR, max_length=20000)
+        schema.add_field("parent_text", DataType.VARCHAR, max_length=_PARENT_MAX)
         schema.add_field("dept_tags", DataType.VARCHAR, max_length=256, default_value="all")
+        schema.add_field("source", DataType.VARCHAR, max_length=256)
+        schema.add_field("page_no", DataType.INT64)
+        schema.add_field("heading", DataType.VARCHAR, max_length=512)
         schema.add_field("vector", DataType.FLOAT_VECTOR, dim=_DIM)
         index_params = self._client.prepare_index_params()
         index_params.add_index(field_name="vector", index_type="AUTOINDEX", metric_type="COSINE")
@@ -101,52 +89,55 @@ class RagStore:
         self._collection = name
 
     async def ingest_dir(self) -> int:
-        """把 data/docs/*.md 灌入向量库。仅管理用，不随服务启动。"""
         if not self.enabled:
             return 0
-        docs_dir = config.DOCS_DIR
-        if not docs_dir.is_dir():
+        if not config.DOCS_DIR.is_dir():
             return 0
         count = 0
-        for path in sorted(docs_dir.glob("*.md")):
-            count += await self.ingest_markdown(path)
+        for path in sorted(config.DOCS_DIR.iterdir()):
+            if path.suffix.lower() in (".md", ".docx", ".doc", ".pdf"):
+                count += await self.ingest_file(path)
         return count
 
-    async def ingest_markdown(self, path: Path) -> int:
-        text = path.read_text(encoding="utf-8")
-        paragraphs = _split_paragraphs(text)
+    async def ingest_file(self, path: Path) -> int:
+        pages = load_pages(path)
+        if not pages:
+            return 0
         rows, pid = [], 0
-        for para in paragraphs:
+        for page in pages:
             pid += 1
-            small = _small_of(para)
-            if not small:
+            smalls = chunk_sentences(page.text)
+            if not smalls:
                 continue
-            vec = (await embed_texts([small]))[0]
-            rows.append(
-                {
+            vecs = await embed_texts(smalls)
+            parent = _clean(page.text)
+            for small, vec in zip(smalls, vecs):
+                rows.append({
                     "parent_id": pid,
                     "small_text": small,
-                    "parent_text": _prepare(para),
+                    "parent_text": parent,
                     "dept_tags": "all",
+                    "source": path.name,
+                    "page_no": page.page_no,
+                    "heading": (page.heading or "")[:500],
                     "vector": vec,
-                }
-            )
+                })
         if rows:
             self._client.insert(collection_name=self._collection, data=rows)
         return len(rows)
 
     async def retrieve(self, query: str, department: str, top_k: int = 5) -> list[str]:
-        """检索子块 -> 按 parent_id 去重 -> 返回父块全文。越权文档在标量过滤层就不出现。"""
+        """检索小块 -> 按 (source,page) 去重 -> 返回父块文本，并带出处前缀供引用。"""
         if not self.enabled:
             return []
         try:
             qv = (await embed_texts([query]))[0]
-            expr = 'dept_tags in ["all", "%s"]' % _prepare(department)
+            expr = 'dept_tags in ["all", "%s"]' % _clean(department)
             res = self._client.search(
                 collection_name=self._collection,
                 data=[qv],
-                limit=top_k * 3,
-                output_fields=["parent_id", "parent_text", "dept_tags"],
+                limit=top_k * 4,
+                output_fields=["parent_id", "parent_text", "source", "page_no", "heading"],
                 filter=expr,
                 search_params={"metric_type": "COSINE"},
             )
@@ -162,7 +153,17 @@ class RagStore:
             if pid in seen:
                 continue
             seen.add(pid)
-            out.append(entity.get("parent_text", ""))
+            source = entity.get("source") or ""
+            pno = entity.get("page_no")
+            head = entity.get("heading") or ""
+            cite = source
+            if pno:
+                cite += f" 第{pno}页"
+            if head:
+                cite += f" · {head}"
+            text = (entity.get("parent_text") or "").strip()
+            if text:
+                out.append(f"[来源 {cite}]\n{text}")
             if len(out) >= top_k:
                 break
         return out
