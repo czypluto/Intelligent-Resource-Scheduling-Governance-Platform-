@@ -12,6 +12,7 @@ from .. import config, java_client, llm, tools
 from ..llm import LlmError
 from ..middleware import current_user
 from ..rag.store import RagStore, rag_available
+from . import memory as mem
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,24 @@ def _is_known_trip(rows, trip_id) -> bool:
     if not rows:
         return False
     return any(r.get("tripId") == trip_id for r in rows)
+
+
+def _history_messages(raw: list[dict]) -> list[dict]:
+    """把记忆里的轮次清洗成可用的对话历史（去重角色/去空/限长），供注入上下文。"""
+    out: list[dict] = []
+    prev = None
+    for m in raw:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content or role == prev:
+            continue
+        out.append({"role": role, "content": content})
+        prev = role
+    if out and out[0]["role"] != "user":
+        out = out[1:]
+    if out and out[-1]["role"] == "user":
+        out = out[:-1]  # 不落一条悬空 user（本轮会重发）
+    return out[-20:]
 
 
 def _system_prompt() -> str:
@@ -95,10 +114,10 @@ class AgentService:
                 yield ev
             return
 
-        msgs = [
-            {"role": "system", "content": _system_prompt()},
-            {"role": "user", "content": f"已知车站：{station_line}\n\n用户请求：{user_text}"},
-        ]
+        history = _history_messages(mem.load(user.user_id))
+        msgs = [{"role": "system", "content": _system_prompt()}]
+        msgs.extend(history)  # 当前对话长期记忆（此前轮次）
+        msgs.append({"role": "user", "content": f"已知车站：{station_line}\n\n用户请求：{user_text}"})
 
         rounds = 0
         shown = False

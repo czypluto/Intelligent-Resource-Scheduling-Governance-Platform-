@@ -6,7 +6,9 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..agent import memory as mem
 from ..agent.orchestrator import AgentService
+from ..middleware import current_user
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +23,15 @@ class ChatBody(BaseModel):
 
 async def _stream(body: ChatBody):
     """逐步推送：思考中 -> 检索/校验 -> 执行 -> 结果。每条事件带当前 model。"""
+    last = None
+    try:
+        uid = current_user().user_id
+    except Exception:  # noqa: BLE001
+        uid = None
     try:
         async for ev in _agent.handle(body.message):
+            if ev.get("kind") in ("result", "answer", "confirm", "denied"):
+                last = ev.get("text")
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
     except PermissionError as e:
         ev = {"kind": "error", "text": str(e), "model": ""}
@@ -32,6 +41,12 @@ async def _stream(body: ChatBody):
         ev = {"kind": "error", "text": f"处理出错：{e}", "model": ""}
         yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
     finally:
+        # 记住这一轮（用户原话 + 最终答复摘要），供下轮指代引用
+        if last and uid:
+            try:
+                mem.append(uid, body.message, last)
+            except Exception:  # noqa: BLE001
+                logger.warning("记忆写入失败")
         yield "data: [DONE]\n\n"
 
 

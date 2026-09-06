@@ -123,7 +123,7 @@ if wsl_up 8000 /api/health; then
   info "Python 主服务(WSL:8000) 已在运行，跳过"
 else
   info "启动 Python 主服务(WSL:8000)…"
-  (nohup wsl -e bash -lc 'gw=$(ip route | awk "/default/{print \$3}"); cd backend-python && JAVA_BASE="http://$gw:8080" exec /usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend-python/wsl-uvicorn.log 2>&1 &)
+  (nohup wsl -e bash -lc 'gw=$(ip route | awk "/default/{print \$3}"); cd backend-python && JAVA_BASE="http://$gw:8080" MEMORY_REDIS_HOST="$gw" exec /usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend-python/wsl-uvicorn.log 2>&1 &)
   wait_up 60 wsl_up 8000 /api/health \
     && info "Python 主服务(WSL:8000) 就绪" \
     || { info "Python 主服务启动失败，见 backend-python/wsl-uvicorn.log"; exit 1; }
