@@ -53,6 +53,10 @@ async function send(text) {
       current.stage = ''
       current.text = ev.text
       current.tone = 'denied'
+    } else if (ev.kind === 'confirm') {
+      current.stage = ''
+      current.text = ev.text
+      current.tone = 'normal'
     } else if (ev.kind === 'result' || ev.kind === 'answer') {
       current.stage = ''
       current.text = ev.text

@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 RULE_HINTS = ("退票", "改签", "儿童", "学生", "票价", "携带", "行李", "证件", "规则", "能不能", "什么规定", "手续费")
 
+CONFIRM_WORDS = ("确认", "是的", "可以", "好的", "就买", "下单", "买吧")
+
 
 def _event(kind: str, text: str, task: str = "agent") -> dict:
     return {"kind": kind, "text": text, "model": config.resolve_model(task)}
@@ -42,6 +44,10 @@ class AgentService:
         self._rag: Optional[RagStore] = None
         # 最近一次查票结果（按用户），用于约束 buy_ticket 的 tripId 必须来自查询
         self._rows: dict[int, list] = {}
+        # 待确认的下单意向（按用户）：模型反向复述后，用户确认才真正下单
+        self._intents: dict[int, dict] = {}
+        # 刚下单的待支付订单 requestId（按用户），便于用户回“支付”完成付款
+        self._orders: dict[int, str] = {}
 
     def _rag_store(self) -> Optional[RagStore]:
         if self._rag is None:
@@ -58,6 +64,27 @@ class AgentService:
             logger.exception("车站服务不可用")
             stations = []
         station_line = "、".join(s["name"] for s in stations[:30])
+
+        # 两段式确认：上一轮已"反向复述待确认"的意向/待支付订单，本轮回“确认/支付”即执行
+        pay_rid = self._orders.get(user.user_id)
+        if pay_rid and any(w in user_text for w in ("支付", "付款", "付钱")):
+            self._orders.pop(user.user_id, None)
+            try:
+                r = await java_client.pay(pay_rid)
+                yield _event("result", f"订单 {pay_rid} 已支付，状态 {r.get('status')}。")
+            except java_client.JavaError as e:
+                yield _event("error", e.msg)
+            return
+        intent = self._intents.get(user.user_id)
+        if intent and any(w in user_text for w in CONFIRM_WORDS):
+            # 用户确认：执行预填的下单
+            self._intents.pop(user.user_id, None)
+            async for ev in self._commit_buy(user, intent):
+                yield ev
+            return
+        if intent:
+            # 用户改了主意/新请求：作废旧意向，落到下面按新请求处理
+            self._intents.pop(user.user_id, None)
 
         # 规则类问题直接走知识库，避免空转调用工具
         if any(h in user_text for h in RULE_HINTS):
@@ -105,19 +132,29 @@ class AgentService:
                         msgs.append({"role": "assistant", "content": f"查票结果：\n{text}"})
                         yield _event("result", text)
                     elif name == "buy_ticket":
-                        # 防臆造：tripId 必须来自用户最近的查票结果
-                        if not _is_known_trip(self._rows.get(user.user_id), args.get("tripId")):
+                        # 防臆造 + 反向复述：tripId 必须来自查票结果，且下单前请用户确认
+                        row = next((r for r in self._rows.get(user.user_id, [])
+                                    if r.get("tripId") == args.get("tripId")), None)
+                        if row is None:
                             yield _event("error", "请先使用 query_tickets 查询车次，再从结果中选择要购买的车次。")
                             return
-                        r = await java_client.buy_ticket(
-                            int(args["tripId"]), args["seatClass"], args["from"], args["to"])
+                        intent = {
+                            "tripId": row["tripId"],
+                            "seatClass": row["seatClass"],
+                            "from": row["from"],
+                            "to": row["to"],
+                            "date": row.get("travelDate"),
+                            "trainCode": row.get("trainCode"),
+                        }
+                        self._intents[user.user_id] = intent
                         shown = True
                         acted = True
-                        line = (f"下单成功：车票 {r.get('from')}->{r.get('to')} "
-                                f"{r.get('seatClass')}，金额 {r.get('priceCents')}分，状态 {r.get('status')}，"
-                                f"订单号 {r.get('orderNo')}。requestId={r.get('requestId')}")
-                        msgs.append({"role": "assistant", "content": line})
-                        yield _event("result", line)
+                        confirm = (f"请确认下单：{intent['trainCode']} {intent['date']} "
+                                   f"{intent['from']}→{intent['to']} {intent['seatClass']} "
+                                   f"¥{round(row.get('priceCents', 0) / 100)}。回复“确认”即出票。")
+                        msgs.append({"role": "assistant", "content": confirm})
+                        yield _event("confirm", confirm)
+                        return
                     elif name == "my_orders":
                         rows = await java_client.my_orders()
                         shown = True
@@ -153,6 +190,22 @@ class AgentService:
                          "content": "基于以上结果：如果还需继续就调用下一个工具；已完事则仅用一句话回复用户。"})
         # 循环结束：给一句收尾（兜底）
         yield _event("answer", "已为您办理。需要支付或退票时告诉我订单号即可。")
+
+    async def _commit_buy(self, user, intent) -> AsyncIterator[dict]:
+        """用户确认后执行预填下单（确定性路径，不再让模型介入）。"""
+        try:
+            r = await java_client.buy_ticket(
+                int(intent["tripId"]), intent["seatClass"], intent["from"], intent["to"])
+        except java_client.JavaError as e:
+            yield _event("error", e.msg)
+            return
+        rid = r.get("requestId")
+        if rid:
+            self._orders[user.user_id] = rid
+        line = (f"下单成功：{r.get('from')}->{r.get('to')} {r.get('seatClass')}，"
+                f"金额 {r.get('priceCents')}分，状态 {r.get('status')}，订单号 {r.get('orderNo')}。"
+                f"回复“支付”完成付款。")
+        yield _event("result", line)
 
     async def _rule_answer(self, user_text: str) -> AsyncIterator[dict]:
         rag = self._rag_store()
