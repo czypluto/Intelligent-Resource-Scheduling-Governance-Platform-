@@ -131,3 +131,17 @@ export async function cancelOrder(requestId) {
 export async function listContacts() {
   return jfetch('/java-api/api/user/contacts')
 }
+
+// ---------- 对话档案（Python） ----------
+
+export async function chatHistoryList() {
+  return jfetch('/py-api/api/chat/history')
+}
+
+export async function chatHistoryDetail(session) {
+  return jfetch(`/py-api/api/chat/history/${encodeURIComponent(session)}`)
+}
+
+export async function chatHistoryReset() {
+  return jfetch('/py-api/api/chat/history/reset', { method: 'POST' })
+}

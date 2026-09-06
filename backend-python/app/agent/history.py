@@ -1,0 +1,114 @@
+"""对话档案：全量记录持久化，用户可回溯。
+
+- 每个"会话"= 一个 JSON 文件（data/chat_hist/{user}_{session}.json），内含 startedAt + messages
+- 每次对话把 user 原话 + assistant 完整文本(含各[结果/答复]行)追加进"当前会话"
+- 提供 列表 / 详情 / 开新会话；开新会话同时清空当前对话记忆
+- 持久性不依赖 Redis（普通文件即可，避免 1h 过期丢档）
+"""
+import json
+import logging
+import time
+import uuid
+from pathlib import Path
+
+from . import memory as mem
+
+logger = logging.getLogger(__name__)
+
+ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "chat_hist"
+_CURRENT = ROOT / "_current.json"
+
+
+def _path(user_id, session):
+    return ROOT / f"{user_id}_{session}.json"
+
+
+def _ensure_dir():
+    ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _read_current(user_id):
+    _ensure_dir()
+    try:
+        d = json.loads(_CURRENT.read_text(encoding="utf-8"))
+        return d.get(str(user_id))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_current(user_id, session):
+    _ensure_dir()
+    d = {}
+    try:
+        d = json.loads(_CURRENT.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    d[str(user_id)] = session
+    _CURRENT.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+
+def current_session(user_id) -> str:
+    s = _read_current(user_id)
+    if not s:
+        s = new_session(user_id)
+    return s
+
+
+def new_session(user_id) -> str:
+    _ensure_dir()
+    s = f"s{uuid.uuid4().hex[:10]}"
+    (ROOT / f"{user_id}_{s}.json").write_text(
+        json.dumps({"startedAt": time.time(), "messages": []}, ensure_ascii=False),
+        encoding="utf-8")
+    _write_current(user_id, s)
+    mem.clear(user_id)  # 新对话也清空当前对话记忆
+    return s
+
+
+def append_turn(user_id, user_text: str, assistant_text: str):
+    """追加一轮到当前会话（assistant_text 为多行完整文本，含各结果/答复）。"""
+    if not user_text:
+        return
+    _ensure_dir()
+    session = current_session(user_id)
+    p = _path(user_id, session)
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        doc = {"startedAt": time.time(), "messages": []}
+    doc["messages"].append({"role": "user", "text": user_text, "ts": time.time()})
+    if assistant_text:
+        doc["messages"].append({"role": "assistant", "text": assistant_text, "ts": time.time()})
+    p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+
+def list_sessions(user_id) -> list[dict]:
+    """按时间倒序返回会话元信息。"""
+    _ensure_dir()
+    out = []
+    for f in ROOT.glob(f"{user_id}_s*.json"):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            msgs = doc.get("messages", [])
+            first_user = next((m.get("text", "") for m in msgs if m.get("role") == "user"), "")
+            out.append({
+                "id": f.name[len(f"{user_id}_"):].replace(".json", ""),
+                "startedAt": doc.get("startedAt", 0),
+                "count": len(msgs) // 2,
+                "preview": first_user[:60],
+            })
+        except Exception:  # noqa: BLE001
+            continue
+    out.sort(key=lambda x: x["startedAt"], reverse=True)
+    return out
+
+
+def get_session(user_id, session) -> list[dict]:
+    p = _path(user_id, session)
+    if not p.exists():
+        return []
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        return doc.get("messages", [])
+    except Exception:  # noqa: BLE001
+        return []

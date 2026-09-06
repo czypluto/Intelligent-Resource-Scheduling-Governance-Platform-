@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
 from .middleware import auth_middleware
-from .routers import chat
+from .routers import chat, history
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ app.add_middleware(
 app.middleware("http")(auth_middleware)
 
 app.include_router(chat.router)
+app.include_router(history.router)
 
 
 @app.get("/api/health")

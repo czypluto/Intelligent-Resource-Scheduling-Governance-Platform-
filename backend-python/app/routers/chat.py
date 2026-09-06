@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..agent import history as hist
 from ..agent import memory as mem
 from ..agent.orchestrator import AgentService
 from ..middleware import current_user
@@ -24,6 +25,7 @@ class ChatBody(BaseModel):
 async def _stream(body: ChatBody):
     """逐步推送：思考中 -> 检索/校验 -> 执行 -> 结果。每条事件带当前 model。"""
     last = None
+    lines: list[str] = []
     try:
         uid = current_user().user_id
     except Exception:  # noqa: BLE001
@@ -32,6 +34,7 @@ async def _stream(body: ChatBody):
         async for ev in _agent.handle(body.message):
             if ev.get("kind") in ("result", "answer", "confirm", "denied"):
                 last = ev.get("text")
+                lines.append(ev.get("text") or "")
             yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
     except PermissionError as e:
         ev = {"kind": "error", "text": str(e), "model": ""}
@@ -41,12 +44,15 @@ async def _stream(body: ChatBody):
         ev = {"kind": "error", "text": f"处理出错：{e}", "model": ""}
         yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
     finally:
-        # 记住这一轮（用户原话 + 最终答复摘要），供下轮指代引用
-        if last and uid:
+        if uid:
             try:
-                mem.append(uid, body.message, last)
+                # 1) 全量对话档案（可回溯）
+                hist.append_turn(uid, body.message, "\n".join(x for x in lines if x))
+                # 2) 当前对话记忆（压缩后的近期+摘要，供指代）
+                if last:
+                    mem.append(uid, body.message, last)
             except Exception:  # noqa: BLE001
-                logger.warning("记忆写入失败")
+                logger.warning("对话记录/记忆写入失败")
         yield "data: [DONE]\n\n"
 
 

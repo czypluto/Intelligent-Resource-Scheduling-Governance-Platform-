@@ -1,6 +1,7 @@
 <script setup>
 import { nextTick, reactive, ref } from 'vue'
-import { chatStream, clearToken } from '../api'
+import { ElMessage } from 'element-plus'
+import { chatHistoryDetail, chatHistoryList, chatHistoryReset, chatStream, clearToken } from '../api'
 
 const props = defineProps({
   user: { type: Object, required: true },
@@ -96,6 +97,42 @@ function logout() {
   localStorage.removeItem('resv_user')
   emit('logout')
 }
+
+// ---- 对话档案：历史回放 / 新对话 ----
+const historyVisible = ref(false)
+const sessions = ref([])
+const replay = ref([])
+const replayTitle = ref('')
+
+async function openHistory() {
+  try {
+    const d = await chatHistoryList()
+    sessions.value = d.sessions || []
+    historyVisible.value = true
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function loadSession(s) {
+  try {
+    const d = await chatHistoryDetail(s.id)
+    replay.value = d.messages || []
+    replayTitle.value = s.preview || s.id
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function newConversation() {
+  try {
+    await chatHistoryReset()
+    messages.length = 0
+    ElMessage.success('已开始新对话')
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
 </script>
 
 <template>
@@ -110,6 +147,10 @@ function logout() {
 
     <main class="main">
       <section class="chat">
+        <div class="tools">
+          <el-button size="small" @click="openHistory">历史回放</el-button>
+          <el-button size="small" :disabled="sending" @click="newConversation">新对话</el-button>
+        </div>
         <div ref="listRef" class="msg-list">
           <div
             v-for="(m, i) in messages"
@@ -150,6 +191,34 @@ function logout() {
           </div>
         </div>
       </section>
+
+      <el-dialog v-model="historyVisible" title="历史回放" width="860px" top="6vh">
+        <div class="hist">
+          <div class="hist-list">
+            <el-button
+              v-for="s in sessions"
+              :key="s.id"
+              class="hist-item"
+              text
+              @click="loadSession(s)"
+            >
+              <div class="hist-t">{{ s.preview || s.id }}</div>
+              <div class="hist-m">{{ s.count }} 轮 · {{ new Date(s.startedAt * 1000).toLocaleString() }}</div>
+            </el-button>
+            <div v-if="!sessions.length" class="hist-empty">暂无历史对话</div>
+          </div>
+          <div class="hist-body">
+            <div class="hist-title">{{ replayTitle || '点击左侧会话查看' }}</div>
+            <div class="hist-msgs">
+              <div v-for="(m, i) in replay" :key="i" class="hist-msg">
+                <span class="who">{{ m.role === 'user' ? '我' : '助手' }}</span>
+                <pre class="txt">{{ m.text }}</pre>
+              </div>
+              <div v-if="!replay.length" class="hist-empty">选择左侧会话后在此展示</div>
+            </div>
+          </div>
+        </div>
+      </el-dialog>
     </main>
   </div>
 </template>
@@ -269,5 +338,83 @@ function logout() {
 .actions {
   margin-top: 8px;
   text-align: right;
+}
+.tools {
+  padding: 6px 12px 0;
+  text-align: right;
+  border-bottom: 1px solid #f0f3f7;
+}
+.hist {
+  display: flex;
+  height: 480px;
+  gap: 12px;
+}
+.hist-list {
+  width: 240px;
+  overflow-y: auto;
+  border-right: 1px solid var(--resv-line);
+  padding-right: 8px;
+}
+.hist-item {
+  display: block;
+  height: auto;
+  white-space: normal;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--resv-line);
+  border-radius: 4px;
+  width: 100%;
+}
+.hist-t {
+  color: #2c3a4a;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-m {
+  color: #9aa7b5;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.hist-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.hist-title {
+  font-weight: 600;
+  color: var(--resv-blue-dark);
+  padding-bottom: 6px;
+  border-bottom: 1px solid #eef1f5;
+}
+.hist-msgs {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.hist-msg {
+  margin-bottom: 10px;
+}
+.who {
+  font-size: 12px;
+  color: var(--resv-blue);
+  margin-right: 6px;
+}
+.hist-msg pre.txt {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  color: #333;
+  background: #f7f9fc;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.hist-empty {
+  color: #9aa7b5;
+  text-align: center;
+  margin-top: 20px;
 }
 </style>
