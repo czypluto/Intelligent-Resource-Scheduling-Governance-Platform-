@@ -1,9 +1,10 @@
 """RAG 存储与检索（Small-to-Big）。
 
 骨架实现说明：
-- 依赖 pymilvus（Milvus Lite）与本地 vLLM 的 /v1/embeddings（Qwen3-Embedding-0.5B）。
-- 依赖未装或模型不可达时，rag_available() 返回 False，Agent 自动走降级，不影响主流程。
-- 数据文件在 backend-python/data/。向量维度写死 1024（Qwen3-Embedding-0.5B），如模型更换需重建集合。
+- 嵌入经本地 /v1/embeddings（bge-m3 CPU 或 WeMM-Embedding-2B int8 GPU），由 app/embed/server.py 分派。
+- 向量维度固定 1024（Matryoshka 截取对齐），如换不同维模型需改 _DIM 并重建集合。
+- 依赖未就绪时 rag_available() 返回 False，Agent 自动降级，不影响主流程。
+- 数据文件在 backend-python/data/。
 """
 import logging
 import re
@@ -36,10 +37,10 @@ class EmbedError(Exception):
 
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """调本地 vLLM 的 OpenAI 兼容 embeddings 接口。"""
+    """调本地嵌入服务的 OpenAI 兼容 /v1/embeddings。"""
     url = f"{config.EMBED_BASE}/v1/embeddings"
     payload = {"model": config.EMBED_MODEL, "input": texts[:64]}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -47,8 +48,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def _split_paragraphs(text: str) -> list[str]:
-    parts = [p.strip() for p in re.split(r"\n{1,}", text) if p.strip()]
-    return parts
+    return [p.strip() for p in re.split(r"\n{1,}", text) if p.strip()]
 
 
 def _small_of(paragraph: str) -> str:
