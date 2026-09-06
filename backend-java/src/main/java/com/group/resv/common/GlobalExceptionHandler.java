@@ -3,6 +3,7 @@ package com.group.resv.common;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -22,6 +23,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiResult<Void>> handleAccessDenied(AccessDeniedException e) {
         return ResponseEntity.status(403).body(ApiResult.fail(403, "无权限执行该操作"));
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResult<Void>> handleOptimisticLock(ObjectOptimisticLockingFailureException e) {
+        // 过期任务/支付/退票并发改写同一订单：后到者感知冲突，提示刷新
+        return ResponseEntity.status(409).body(ApiResult.fail(409, "订单状态刚被更新，请刷新后重试"));
     }
 
     @ExceptionHandler(Exception.class)

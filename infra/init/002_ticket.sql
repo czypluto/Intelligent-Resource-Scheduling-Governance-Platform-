@@ -113,3 +113,5 @@ ALTER TABLE ticket_order
 ALTER TABLE sys_user ADD COLUMN student TINYINT(1) DEFAULT NULL COMMENT '是否全日制在校学生' AFTER role;
 
 ALTER TABLE ticket_order ADD COLUMN seat_no VARCHAR(32) DEFAULT NULL COMMENT '分配的座位号' AFTER passenger_age;
+
+ALTER TABLE ticket_order ADD COLUMN version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本' AFTER cancelled_at;

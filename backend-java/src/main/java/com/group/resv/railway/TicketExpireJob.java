@@ -35,11 +35,15 @@ public class TicketExpireJob {
         List<TicketOrder> stale = orderRepository.findByStatusAndCreatedAtBefore(
                 TicketOrder.PENDING, LocalDateTime.now().minusMinutes(10));
         for (TicketOrder o : stale) {
-            o.setStatus(TicketOrder.EXPIRED);
-            orderRepository.save(o);
-            stockService.release(o.getTripId(), o.getSeatClass());
-            redis.delete(RailwayKeys.active(o.getUserId(), o.getTripId()));
-            log.info("订单 {} 超时未支付，已过期并回补余票、释放占位", o.getRequestId());
+            try {
+                o.setStatus(TicketOrder.EXPIRED);
+                orderRepository.save(o); // 若与支付并发，乐观锁会让其中一方失败并重试下一轮
+                stockService.release(o.getTripId(), o.getSeatClass());
+                redis.delete(RailwayKeys.active(o.getUserId(), o.getTripId()));
+                log.info("订单 {} 超时未支付，已过期并回补余票、释放占位", o.getRequestId());
+            } catch (Exception e) {  // noqa: BLE001
+                log.warn("订单 {} 过期处理失败（可能正被支付），跳过本轮：{}", o.getRequestId(), e.getMessage());
+            }
         }
     }
 }

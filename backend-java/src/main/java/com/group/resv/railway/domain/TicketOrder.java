@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -78,4 +79,8 @@ public class TicketOrder {
 
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
+
+    /** 乐观锁：解决 过期任务/支付/退票 并发改写同一订单的丢失更新 */
+    @Version
+    private Integer version = 0;
 }

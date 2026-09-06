@@ -225,7 +225,7 @@ public class TicketService {
             // 一人一票活跃占位（车次级 SETNX 原子准入，防并发“先查后写”重复下单）
             String activeKey = RailwayKeys.active(user.userId(), trip.getId());
             Boolean acquired = redis.opsForValue().setIfAbsent(
-                    activeKey, "1", Duration.ofDays(30));
+                    activeKey, "1", Duration.ofMinutes(30)); // 兜底租约；正常走 cancel/expire 显式释放
             if (!Boolean.TRUE.equals(acquired)) {
                 throw new BizException(409, "您已购买该车次车票，一人一票，请勿重复购买");
             }
