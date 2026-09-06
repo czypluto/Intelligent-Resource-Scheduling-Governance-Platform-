@@ -32,12 +32,12 @@ public class TicketPolicy {
         }
     }
 
-    /** 同人同车次同席别已有未取消订单则不放行（一人一票约束） */
-    public void ensureOneTicket(Long userId, Long tripId, String seatClass) {
-        boolean exists = orderRepository.existsByUserIdAndTripIdAndSeatClassAndStatusIn(
-                userId, tripId, seatClass, Set.of(TicketOrder.PAID, TicketOrder.PENDING));
+    /** 同人同车次已有未取消订单则不放行（每车次一人一票，不限席别） */
+    public void ensureOneTicket(Long userId, Long tripId) {
+        boolean exists = orderRepository.existsByUserIdAndTripIdAndStatusIn(
+                userId, tripId, Set.of(TicketOrder.PAID, TicketOrder.PENDING));
         if (exists) {
-            throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
+            throw new BizException(409, "您已购买该车次车票，一人一票，请勿重复购买");
         }
     }
 

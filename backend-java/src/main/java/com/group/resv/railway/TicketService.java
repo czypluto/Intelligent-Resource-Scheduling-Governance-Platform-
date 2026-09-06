@@ -171,8 +171,8 @@ public class TicketService {
         TripClass tc = tripClassRepository.findByTripIdAndSeatClass(trip.getId(), req.seatClass())
                 .orElseThrow(() -> new BizException(404, "该席别不存在"));
 
-        // 确定性规则审核（独立于模型）
-        policy.ensureOneTicket(user.userId(), trip.getId(), tc.getSeatClass());
+        // 确定性规则审核（独立于模型）：每车次一人一票
+        policy.ensureOneTicket(user.userId(), trip.getId());
 
         // 乘车人：优先常用联系人，否则本人
         Contact c = req.contactId() == null ? null
@@ -222,12 +222,12 @@ public class TicketService {
                 return orderView(existed.get());
             }
 
-            // 一人一票活跃占位（SETNX 原子准入，防并发“先查后写”重复下单）
-            String activeKey = RailwayKeys.active(user.userId(), trip.getId(), tc.getSeatClass());
+            // 一人一票活跃占位（车次级 SETNX 原子准入，防并发“先查后写”重复下单）
+            String activeKey = RailwayKeys.active(user.userId(), trip.getId());
             Boolean acquired = redis.opsForValue().setIfAbsent(
                     activeKey, "1", Duration.ofDays(30));
             if (!Boolean.TRUE.equals(acquired)) {
-                throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
+                throw new BizException(409, "您已购买该车次车票，一人一票，请勿重复购买");
             }
 
             // Lua 原子扣减；未预热先预热一次
@@ -240,6 +240,10 @@ public class TicketService {
                 redis.delete(activeKey); // 没买到就释放占位
                 throw new BizException(409, "余票不足");
             }
+
+            // 座位分配：原子递增取号，已分配的座不会再给第二个用户
+            long seatNo = redis.opsForValue().increment(
+                    RailwayKeys.seatSeq(trip.getId(), tc.getSeatClass()));
 
             String from = name(stops.get(fromIdx).getStationId());
             String to = name(stops.get(toIdx).getStationId());
@@ -256,6 +260,7 @@ public class TicketService {
             event.put("passengerName", passengerName);
             event.put("passengerId", passengerId == null ? "" : passengerId);
             event.put("passengerAge", passengerAge == null ? "" : String.valueOf(passengerAge));
+            event.put("seatNo", String.valueOf(seatNo));
             event.put("priceCents", String.valueOf(priceCents));
             try {
                 redis.opsForStream().add(RailwayKeys.orderStream(), event);
@@ -271,7 +276,8 @@ public class TicketService {
             m.put("orderNo", orderNo);
             m.put("requestId", requestId);
             m.put("status", TicketOrder.PENDING);
-            m.put("message", "座位已锁定，请及时支付");
+            m.put("message", "座位 " + seatNo + " 已锁定，请及时支付");
+            m.put("seatNo", seatNo);
             if (train != null) {
                 m.put("trainCode", train.getCode());
             }
@@ -319,7 +325,7 @@ public class TicketService {
         orderRepository.save(order);
         stockService.release(order.getTripId(), order.getSeatClass());
         // 释放一人一票活跃占位，允许该用户之后重新购买同车次同席别
-        redis.delete(RailwayKeys.active(order.getUserId(), order.getTripId(), order.getSeatClass()));
+        redis.delete(RailwayKeys.active(order.getUserId(), order.getTripId()));
         log.info("退票 requestId={} 余票已回补", requestId);
         return orderView(order);
     }
@@ -354,6 +360,7 @@ public class TicketService {
         m.put("from", o.getFromStation());
         m.put("to", o.getToStation());
         m.put("passengerName", o.getPassengerName());
+        m.put("seatNo", o.getSeatNo());
         m.put("priceCents", o.getPriceCents());
         m.put("status", o.getStatus());
         m.put("createdAt", o.getCreatedAt());

@@ -111,3 +111,5 @@ ALTER TABLE ticket_order
     ADD COLUMN passenger_age INT DEFAULT NULL COMMENT '乘车人年龄快照(儿童票判定)' AFTER passenger_id;
 
 ALTER TABLE sys_user ADD COLUMN student TINYINT(1) DEFAULT NULL COMMENT '是否全日制在校学生' AFTER role;
+
+ALTER TABLE ticket_order ADD COLUMN seat_no VARCHAR(32) DEFAULT NULL COMMENT '分配的座位号' AFTER passenger_age;

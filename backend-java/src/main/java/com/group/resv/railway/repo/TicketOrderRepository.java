@@ -18,6 +18,8 @@ public interface TicketOrderRepository extends JpaRepository<TicketOrder, Long> 
     boolean existsByUserIdAndTripIdAndSeatClassAndStatusIn(
             Long userId, Long tripId, String seatClass, Collection<String> statuses);
 
+    boolean existsByUserIdAndTripIdAndStatusIn(Long userId, Long tripId, Collection<String> statuses);
+
     List<TicketOrder> findByStatusAndCreatedAtBefore(String status, java.time.LocalDateTime before);
 
     long countByTripIdAndSeatClassAndStatusIn(Long tripId, String seatClass, Collection<String> statuses);

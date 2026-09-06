@@ -49,6 +49,9 @@ public class TicketOrder {
     @Column(name = "passenger_age")
     private Integer passengerAge;
 
+    @Column(name = "seat_no", length = 32)
+    private String seatNo;
+
     @Column(name = "from_station", nullable = false, length = 64)
     private String fromStation;
 
