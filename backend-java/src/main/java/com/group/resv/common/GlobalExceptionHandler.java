@@ -3,6 +3,7 @@ package com.group.resv.common;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -16,6 +17,11 @@ public class GlobalExceptionHandler {
         int code = e.getCode();
         int status = code >= 400 && code <= 599 ? code : 500;
         return ResponseEntity.status(status).body(ApiResult.fail(code, e.getMessage()));
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResult<Void>> handleAccessDenied(AccessDeniedException e) {
+        return ResponseEntity.status(403).body(ApiResult.fail(403, "无权限执行该操作"));
     }
 
     @ExceptionHandler(Exception.class)

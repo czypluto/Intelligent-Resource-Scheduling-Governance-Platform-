@@ -18,6 +18,16 @@ from .middleware import raw_token
 
 logger = logging.getLogger(__name__)
 
+_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """连接复用：进程内共享一个 AsyncClient，避免每请求新建。"""
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=20)
+    return _client
+
 
 class JavaError(Exception):
     def __init__(self, code: int, msg: str):
@@ -28,8 +38,7 @@ class JavaError(Exception):
 async def _call(method: str, path: str, body: Optional[dict] = None) -> Any:
     url = f"{config.JAVA_BASE}{path}"
     headers = {"Authorization": f"Bearer {raw_token()}"}
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.request(method, url, json=body, headers=headers)
+    resp = await _get_client().request(method, url, json=body, headers=headers)
     try:
         payload = resp.json()
     except json.JSONDecodeError:

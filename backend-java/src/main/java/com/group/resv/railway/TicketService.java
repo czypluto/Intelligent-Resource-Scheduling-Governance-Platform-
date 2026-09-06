@@ -19,10 +19,13 @@ import com.group.resv.redis.RateLimiter;
 import com.group.resv.repo.ContactRepository;
 import com.group.resv.repo.UserRepository;
 import com.group.resv.security.AuthUser;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -123,8 +127,13 @@ public class TicketService {
 
     // ---------- 下单 ----------
 
-    public record BuyRequest(Long tripId, String seatClass, Long fromStationId, Long toStationId,
-                             Long contactId, String requestId) {
+    public record BuyRequest(
+            @NotNull(message = "车次不能为空") Long tripId,
+            @NotBlank(message = "席别不能为空") String seatClass,
+            @NotNull(message = "出发站不能为空") Long fromStationId,
+            @NotNull(message = "到达站不能为空") Long toStationId,
+            Long contactId,
+            String requestId) {
     }
 
     public Map<String, Object> buy(AuthUser user, BuyRequest req) {
@@ -146,6 +155,9 @@ public class TicketService {
         if (!"OPEN".equals(trip.getStatus())) {
             throw new BizException(400, "该车次已停售");
         }
+        if (trip.getTravelDate().isBefore(LocalDate.now())) {
+            throw new BizException(400, "该车次开行日期已过，无法购买");
+        }
         Train train = trainRepository.findById(trip.getTrainId()).orElse(null);
         List<TrainStop> stops = trainStopRepository.findByTrainIdOrderBySeqAsc(trip.getTrainId());
         int fromIdx = indexOfStation(stops, req.fromStationId());
@@ -155,6 +167,12 @@ public class TicketService {
         }
         TripClass tc = tripClassRepository.findByTripIdAndSeatClass(trip.getId(), req.seatClass())
                 .orElseThrow(() -> new BizException(404, "该席别不存在"));
+
+        // 同人同车次同席别，已有未取消订单则不再放行（12306 一人一票约束）
+        if (orderRepository.existsByUserIdAndTripIdAndSeatClassAndStatusIn(
+                user.userId(), trip.getId(), tc.getSeatClass(), Set.of(TicketOrder.PAID, TicketOrder.PENDING))) {
+            throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
+        }
 
         // 乘车人：优先常用联系人，否则本人
         Contact c = req.contactId() == null ? null
@@ -271,8 +289,10 @@ public class TicketService {
     }
 
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> myOrders(Long userId) {
-        return orderRepository.findByUserIdOrderByIdDesc(userId).stream().map(this::orderView).toList();
+    public List<Map<String, Object>> myOrders(Long userId, int size) {
+        int limit = Math.max(1, Math.min(size, 100));
+        return orderRepository.findByUserIdOrderByIdDesc(userId, PageRequest.of(0, limit))
+                .stream().map(this::orderView).toList();
     }
 
     @Transactional(readOnly = true)

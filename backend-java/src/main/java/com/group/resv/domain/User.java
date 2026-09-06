@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -26,7 +27,8 @@ public class User {
     @Column(nullable = false, unique = true, length = 64)
     private String username;
 
-    /** BCrypt 密文 */
+    /** BCrypt 密文（出参永不序列化） */
+    @JsonIgnore
     @Column(nullable = false, length = 128)
     private String password;
 

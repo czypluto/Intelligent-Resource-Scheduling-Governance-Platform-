@@ -12,6 +12,7 @@ import com.group.resv.railway.repo.TrainRepository;
 import com.group.resv.railway.repo.TrainStopRepository;
 import com.group.resv.railway.repo.TripClassRepository;
 import com.group.resv.railway.repo.TripRepository;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,6 +35,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/rail")
+@PreAuthorize("hasRole('ADMIN')")
 @Transactional
 public class RailwayAdminController {
 

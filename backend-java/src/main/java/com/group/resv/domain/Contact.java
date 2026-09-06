@@ -1,5 +1,6 @@
 package com.group.resv.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -31,6 +32,7 @@ public class Contact {
     @Column(name = "id_type", length = 16)
     private String idType = "身份证";
 
+    @JsonIgnore
     @Column(name = "id_no", length = 32)
     private String idNo;
 

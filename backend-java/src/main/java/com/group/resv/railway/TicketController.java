@@ -3,6 +3,7 @@ package com.group.resv.railway;
 import com.group.resv.common.ApiResult;
 import com.group.resv.railway.domain.TicketOrder;
 import com.group.resv.security.SecurityUtil;
+import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,7 +40,7 @@ public class TicketController {
     }
 
     @PostMapping("/buy")
-    public ApiResult<Map<String, Object>> buy(@RequestBody TicketService.BuyRequest req) {
+    public ApiResult<Map<String, Object>> buy(@Valid @RequestBody TicketService.BuyRequest req) {
         return ApiResult.ok(ticketService.buy(SecurityUtil.current(), req));
     }
 
@@ -54,8 +55,8 @@ public class TicketController {
     }
 
     @GetMapping("/orders/my")
-    public ApiResult<List<Map<String, Object>>> my() {
-        return ApiResult.ok(ticketService.myOrders(SecurityUtil.current().userId()));
+    public ApiResult<List<Map<String, Object>>> my(@RequestParam(defaultValue = "50") int size) {
+        return ApiResult.ok(ticketService.myOrders(SecurityUtil.current().userId(), size));
     }
 
     @GetMapping("/orders/request/{requestId}")

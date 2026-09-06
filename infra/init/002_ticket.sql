@@ -96,3 +96,6 @@ CREATE TABLE IF NOT EXISTS contact (
     PRIMARY KEY (id),
     KEY idx_contact_user (user_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '常用联系人';
+
+-- 按日期查车次需要索引（日期单独过滤时避免全表扫）
+ALTER TABLE trip ADD INDEX idx_trip_date (travel_date);

@@ -22,13 +22,15 @@ import java.time.LocalTime;
 import java.util.List;
 
 /**
- * 首次启动播种演示线路：京沪线 G101，未来 3 天开行 + 席别库存，并预热 Redis 余票。
+ * 演示线路自愈播种：保证京沪 G101 及未来 30 天开行 + 席别库存都在（缺则补），并预热 Redis 余票。
+ * 每次启动幂等执行，避免演示日期过期后无车可查。
  */
 @Component
 @Order(11)
 public class RailwayDataInitializer implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(RailwayDataInitializer.class);
+    private static final int AHEAD_DAYS = 30;
 
     private final StationRepository stationRepository;
     private final TrainRepository trainRepository;
@@ -53,45 +55,60 @@ public class RailwayDataInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (trainRepository.count() > 0) {
-            return;
+        Train g101 = trainRepository.findByCode("G101").orElseGet(this::createTrain);
+        ensureStations();
+        if (trainStopRepository.findByTrainIdOrderBySeqAsc(g101.getId()).size() < 2) {
+            rebuildStops(g101.getId());
         }
+        int created = 0;
+        for (int d = 0; d < AHEAD_DAYS; d++) {
+            LocalDate date = LocalDate.now().plusDays(d);
+            Trip trip = tripRepository.findByTrainIdAndTravelDate(g101.getId(), date).orElse(null);
+            if (trip == null) {
+                Trip t = new Trip();
+                t.setTrainId(g101.getId());
+                t.setTravelDate(date);
+                trip = tripRepository.save(t);
+                created++;
+            }
+            for (TripClass tc : List.of(
+                    seat(trip.getId(), "二等座", 55300, 600),
+                    seat(trip.getId(), "一等座", 93300, 100),
+                    seat(trip.getId(), "商务座", 174800, 20))) {
+                stockService.preheat(trip.getId(), tc.getSeatClass());
+            }
+        }
+        if (created > 0) {
+            log.info("演示线路 G101 已补开未来 {} 天（新增 {} 天）", AHEAD_DAYS, created);
+        }
+    }
+
+    private Train createTrain() {
+        Train t = new Train();
+        t.setCode("G101");
+        t.setName("北京南-上海虹桥");
+        t.setKind("G");
+        return trainRepository.save(t);
+    }
+
+    private void ensureStations() {
+        station("BJP", "北京南");
+        station("JNK", "济南西");
+        station("NJH", "南京南");
+        station("SHH", "上海虹桥");
+    }
+
+    private void rebuildStops(Long trainId) {
+        trainStopRepository.deleteByTrainId(trainId);
+        station("BJP", "北京南");
         Station bjn = station("BJP", "北京南");
         Station jnx = station("JNK", "济南西");
         Station njn = station("NJH", "南京南");
         Station shh = station("SHH", "上海虹桥");
-
-        Train g101 = new Train();
-        g101.setCode("G101");
-        g101.setName("北京南-上海虹桥");
-        g101.setKind("G");
-        trainRepository.save(g101);
-
-        stop(g101.getId(), 0, bjn.getId(), null, LocalTime.of(7, 0));
-        stop(g101.getId(), 1, jnx.getId(), LocalTime.of(8, 15), LocalTime.of(8, 18));
-        stop(g101.getId(), 2, njn.getId(), LocalTime.of(10, 5), LocalTime.of(10, 9));
-        stop(g101.getId(), 3, shh.getId(), LocalTime.of(11, 30), null);
-
-        LocalDate today = LocalDate.now();
-        for (int d = 0; d < 3; d++) {
-            Trip trip = new Trip();
-            trip.setTrainId(g101.getId());
-            trip.setTravelDate(today.plusDays(d));
-            tripRepository.save(trip);
-            seat(trip.getId(), "二等座", 55300, 600);
-            seat(trip.getId(), "一等座", 93300, 100);
-            seat(trip.getId(), "商务座", 174800, 20);
-        }
-
-        // 预热未来 3 天余票
-        for (int d = 0; d < 3; d++) {
-            tripRepository.findByTrainIdAndTravelDate(g101.getId(), today.plusDays(d)).ifPresent(trip -> {
-                for (TripClass tc : tripClassRepository.findByTripIdOrderByIdAsc(trip.getId())) {
-                    stockService.preheat(trip.getId(), tc.getSeatClass());
-                }
-            });
-        }
-        log.info("已播种演示线路 G101（未来 3 天）");
+        stop(trainId, 0, bjn.getId(), null, LocalTime.of(7, 0));
+        stop(trainId, 1, jnx.getId(), LocalTime.of(8, 15), LocalTime.of(8, 18));
+        stop(trainId, 2, njn.getId(), LocalTime.of(10, 5), LocalTime.of(10, 9));
+        stop(trainId, 3, shh.getId(), LocalTime.of(11, 30), null);
     }
 
     private Station station(String code, String name) {
@@ -113,12 +130,14 @@ public class RailwayDataInitializer implements ApplicationRunner {
         trainStopRepository.save(st);
     }
 
-    private void seat(Long tripId, String seatClass, long priceCents, int seats) {
-        TripClass tc = new TripClass();
-        tc.setTripId(tripId);
-        tc.setSeatClass(seatClass);
-        tc.setPriceCents(priceCents);
-        tc.setTotalSeats(seats);
-        tripClassRepository.save(tc);
+    private TripClass seat(Long tripId, String seatClass, long priceCents, int seats) {
+        return tripClassRepository.findByTripIdAndSeatClass(tripId, seatClass).orElseGet(() -> {
+            TripClass tc = new TripClass();
+            tc.setTripId(tripId);
+            tc.setSeatClass(seatClass);
+            tc.setPriceCents(priceCents);
+            tc.setTotalSeats(seats);
+            return tripClassRepository.save(tc);
+        });
     }
 }
