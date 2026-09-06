@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 RULE_HINTS = ("退票", "改签", "儿童", "学生", "票价", "携带", "行李", "证件", "规则", "能不能", "什么规定", "手续费")
 
+# 动作词：命中则视为"办业务"而非"问规则"，避免规则词把下单请求吞进 RAG
+ACTION_WORDS = ("买", "订", "购", "预约", "帮我查", "下单")
+
 CONFIRM_WORDS = ("确认", "是的", "可以", "好的", "就买", "下单", "买吧")
 
 
@@ -86,8 +89,8 @@ class AgentService:
             # 用户改了主意/新请求：作废旧意向，落到下面按新请求处理
             self._intents.pop(user.user_id, None)
 
-        # 规则类问题直接走知识库，避免空转调用工具
-        if any(h in user_text for h in RULE_HINTS):
+        # 规则类问题直接走知识库（若含动作词则视为办业务，交给工具循环）
+        if any(h in user_text for h in RULE_HINTS) and not any(a in user_text for a in ACTION_WORDS):
             async for ev in self._rule_answer(user_text):
                 yield ev
             return
