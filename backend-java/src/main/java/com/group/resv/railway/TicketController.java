@@ -1,7 +1,10 @@
 package com.group.resv.railway;
 
+import com.group.resv.audit.AuditService;
 import com.group.resv.common.ApiResult;
+import com.group.resv.common.BizException;
 import com.group.resv.railway.domain.TicketOrder;
+import com.group.resv.security.AuthUser;
 import com.group.resv.security.SecurityUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -28,9 +31,23 @@ import java.util.Map;
 public class TicketController {
 
     private final TicketService ticketService;
+    private final AuditService auditService;
 
-    public TicketController(TicketService ticketService) {
+    public TicketController(TicketService ticketService, AuditService auditService) {
         this.ticketService = ticketService;
+        this.auditService = auditService;
+    }
+
+    private AuthUser who() {
+        return SecurityUtil.current();
+    }
+
+    private Map<String, Object> p(Object... kv) {
+        Map<String, Object> m = new java.util.HashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            m.put(String.valueOf(kv[i]), kv[i + 1]);
+        }
+        return m;
     }
 
     @Operation(summary = "余票查询", description = "按起止站与日期查可用车次及席别余票")
@@ -46,17 +63,44 @@ public class TicketController {
     @Operation(summary = "购票", description = "锁定库存并生成待支付订单（幂等，同人同车次同席别防重复）")
     @PostMapping("/buy")
     public ApiResult<Map<String, Object>> buy(@Valid @RequestBody TicketService.BuyRequest req) {
-        return ApiResult.ok(ticketService.buy(SecurityUtil.current(), req));
+        AuthUser u = who();
+        Map<String, Object> params = p("tripId", req.tripId(), "seatClass", req.seatClass(),
+                "fromStationId", req.fromStationId(), "toStationId", req.toStationId());
+        try {
+            Map<String, Object> r = ticketService.buy(u, req);
+            auditService.success(u.userId(), "ticket", "buy", String.valueOf(r.get("requestId")),
+                    p("tripId", req.tripId(), "seatClass", req.seatClass(), "orderNo", r.get("orderNo"), "status", r.get("status")));
+            return ApiResult.ok(r);
+        } catch (BizException e) {
+            auditService.fail(u.userId(), "ticket", "buy", String.valueOf(params.get("tripId")), params, e.getMessage());
+            throw e;
+        }
     }
 
     @PostMapping("/orders/{requestId}/pay")
     public ApiResult<Map<String, Object>> pay(@PathVariable String requestId) {
-        return ApiResult.ok(ticketService.pay(requestId, SecurityUtil.current().userId()));
+        AuthUser u = who();
+        try {
+            Map<String, Object> r = ticketService.pay(requestId, u.userId());
+            auditService.success(u.userId(), "ticket", "pay", requestId, p("status", r.get("status"), "orderNo", r.get("orderNo")));
+            return ApiResult.ok(r);
+        } catch (BizException e) {
+            auditService.fail(u.userId(), "ticket", "pay", requestId, p(), e.getMessage());
+            throw e;
+        }
     }
 
     @PostMapping("/orders/{requestId}/cancel")
     public ApiResult<Map<String, Object>> cancel(@PathVariable String requestId) {
-        return ApiResult.ok(ticketService.cancel(requestId, SecurityUtil.current().userId()));
+        AuthUser u = who();
+        try {
+            Map<String, Object> r = ticketService.cancel(requestId, u.userId());
+            auditService.success(u.userId(), "ticket", "cancel", requestId, p("status", r.get("status"), "orderNo", r.get("orderNo")));
+            return ApiResult.ok(r);
+        } catch (BizException e) {
+            auditService.fail(u.userId(), "ticket", "cancel", requestId, p(), e.getMessage());
+            throw e;
+        }
     }
 
     @GetMapping("/orders/my")

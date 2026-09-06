@@ -62,6 +62,7 @@ public class TicketService {
     private final StringRedisTemplate redis;
     private final RedissonClient redisson;
     private final RateLimiter rateLimiter;
+    private final TicketPolicy policy;
 
     public TicketService(TripRepository tripRepository,
                          TrainRepository trainRepository,
@@ -74,7 +75,8 @@ public class TicketService {
                          RailwayStockService stockService,
                          StringRedisTemplate redis,
                          RedissonClient redisson,
-                         RateLimiter rateLimiter) {
+                         RateLimiter rateLimiter,
+                         TicketPolicy policy) {
         this.tripRepository = tripRepository;
         this.trainRepository = trainRepository;
         this.trainStopRepository = trainStopRepository;
@@ -87,6 +89,7 @@ public class TicketService {
         this.redis = redis;
         this.redisson = redisson;
         this.rateLimiter = rateLimiter;
+        this.policy = policy;
     }
 
     // ---------- 余票查询 ----------
@@ -155,9 +158,7 @@ public class TicketService {
         if (!"OPEN".equals(trip.getStatus())) {
             throw new BizException(400, "该车次已停售");
         }
-        if (trip.getTravelDate().isBefore(LocalDate.now())) {
-            throw new BizException(400, "该车次开行日期已过，无法购买");
-        }
+        policy.ensureNotPast(trip);
         Train train = trainRepository.findById(trip.getTrainId()).orElse(null);
         List<TrainStop> stops = trainStopRepository.findByTrainIdOrderBySeqAsc(trip.getTrainId());
         int fromIdx = indexOfStation(stops, req.fromStationId());
@@ -168,11 +169,8 @@ public class TicketService {
         TripClass tc = tripClassRepository.findByTripIdAndSeatClass(trip.getId(), req.seatClass())
                 .orElseThrow(() -> new BizException(404, "该席别不存在"));
 
-        // 同人同车次同席别，已有未取消订单则不再放行（12306 一人一票约束）
-        if (orderRepository.existsByUserIdAndTripIdAndSeatClassAndStatusIn(
-                user.userId(), trip.getId(), tc.getSeatClass(), Set.of(TicketOrder.PAID, TicketOrder.PENDING))) {
-            throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
-        }
+        // 确定性规则审核（独立于模型）
+        policy.ensureOneTicket(user.userId(), trip.getId(), tc.getSeatClass());
 
         // 乘车人：优先常用联系人，否则本人
         Contact c = req.contactId() == null ? null

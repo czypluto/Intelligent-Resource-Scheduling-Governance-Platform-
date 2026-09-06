@@ -45,6 +45,7 @@ class TicketServiceTest {
     @Mock StringRedisTemplate redis;
     @Mock RedissonClient redisson;
     @Mock RateLimiter rateLimiter;
+    @Mock TicketPolicy policy;
 
     @InjectMocks TicketService ticketService;
 
