@@ -1,7 +1,9 @@
-"""Agent 当前对话长期记忆：按用户存最近几轮（Redis + 进程内存兜底）。
+"""Agent 当前对话记忆（两层：近期原文 + 早期滚动摘要/上下文压缩）。
 
-只记用户原话 + 本轮最终答复的**摘要文本**（不存工具过程/状态），
-避免上下文里回放 tool 噪音；每次请求后滚动更新并滑动续期。
+- 近期：保留最近 RAW_LIMIT 条原文，保证指代用的近期细节不丢；
+- 超出即触发一次“上下文压缩”：把被淘汰的更早轮次用 LLM 压进一条摘要并滚动继承；
+  LLM 不可用时退回朴素拼接截断，绝不因此抛错。
+- 存储：Redis（MEMORY_REDIS_HOST）优先，连不上退回进程内存。
 """
 import json
 import logging
@@ -10,10 +12,12 @@ import os
 logger = logging.getLogger(__name__)
 
 KEY_PREFIX = "mem:agent:"
-MAX_MSGS = 24          # 最多保留 12 轮（24 条 user/assistant）
-TTL_SEC = 3600         # 1 小时滑动过期
+TTL_SEC = 3600
+RAW_LIMIT = 10               # 保留最近 ~5 轮原文
+SUMMARY_MAX = 1200           # 摘要上限（字）
+_STATE = ("summary", "msgs")
 
-_fallback: dict[int, list] = {}  # 进程内存兜底（无 Redis 时）
+_fallback: dict[int, dict] = {}
 
 try:
     import redis as _redis
@@ -28,58 +32,109 @@ try:
         except Exception as e:  # noqa: BLE001
             logger.warning("Redis 不可用，记忆退回进程内存：%s", e)
             return None
-
-    _redis_client = None
 except Exception:  # noqa: BLE001
-    _redis_client = False
     _redis = None
 
 
-def _get() -> object:
-    global _redis_client
-    if _redis_client is None and _redis is not None:
-        _redis_client = _client()
-        if _redis_client is False:
-            _redis_client = None
-    return _redis_client
+def _key(user_id):
+    return f"{KEY_PREFIX}{user_id}"
 
 
-def load(user_id: int) -> list[dict]:
-    key = f"{KEY_PREFIX}{user_id}"
-    c = _get()
+def _read(user_id) -> dict:
+    empty = {"summary": "", "msgs": []}
+    c = _client() if _redis else None
     if c:
-        raw = c.get(key)
+        raw = c.get(_key(user_id))
         if raw:
             try:
-                return json.loads(raw)
+                d = json.loads(raw)
+                return {"summary": d.get("summary", ""), "msgs": d.get("msgs", [])}
             except Exception:  # noqa: BLE001
-                return []
-        return []
-    return list(_fallback.get(user_id, []))
+                return empty
+        return empty
+    return _fallback.get(user_id, dict(empty))
 
 
-def append(user_id: int, user_text: str, reply: str):
-    """追加一轮(user, assistant)，修剪并保存（滑动续期）。"""
+def _write(user_id, state):
+    c = _client() if _redis else None
+    if c:
+        c.setex(_key(user_id), TTL_SEC, json.dumps(state, ensure_ascii=False))
+    else:
+        _fallback[user_id] = state
+
+
+def load_state(user_id) -> dict:
+    """返回 {summary, msgs}：msgs 为清洗后可直接注入的对话原文。"""
+    st = _read(user_id)
+    msgs = _clean(st.get("msgs", []))
+    return {"summary": st.get("summary", ""), "msgs": msgs}
+
+
+def _clean(raw):
+    out, prev = [], None
+    for m in raw:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content or role == prev:
+            continue
+        out.append({"role": role, "content": content})
+        prev = role
+    if out and out[0]["role"] != "user":
+        out = out[1:]
+    if out and out[-1]["role"] == "user":
+        out = out[:-1]
+    return out
+
+
+def _compress(summary_old: str, evicted: list[dict]) -> str:
+    """把更早轮次压进摘要。优先 LLM，失败退朴素拼接。"""
+    turns = "\n".join(f"{m.get('role')}: {m.get('content')}" for m in evicted)
+    try:
+        from .. import llm
+
+        base = f"这是已有的对话摘要：\n{summary_old}\n" if summary_old else ""
+        out = llm.chat(
+            task="gen",
+            messages=[
+                {"role": "system",
+                 "content": "你是会话记忆压缩器。把下面的旧对话合并进已有摘要，产出不超过300字的中文要点，"
+                            "保留：出发/到达站、车次、席别、日期、已下单/退票的订单、用户偏好；不要客套。"},
+                {"role": "user", "content": base + f"\n新增旧对话：\n{turns}"},
+            ],
+            temperature=0.0,
+        )
+        if out and out.content and out.content.strip():
+            return out.content.strip()[:_SUMMARY_MAX]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("摘要压缩失败，退朴素拼接：%s", e)
+    # 朴素回退：只取被淘汰轮次里的用户话，截到上限
+    user_only = "；".join(m.get("content", "") for m in evicted if m.get("role") == "user")
+    merged = ((summary_old + " " + user_only) if summary_old else user_only).strip()
+    return merged[:_SUMMARY_MAX]
+
+
+def append(user_id, user_text, reply):
+    """记一轮 (user, assistant)；超窗则触发上下文压缩并保留近期原文。"""
     if not user_text or not reply:
         return
-    msgs = load(user_id)
-    # 避免连续两个 user（前一轮没有 assistant 答复）
+    st = _read(user_id)
+    msgs = st.get("msgs", [])
     if msgs and msgs[-1].get("role") == "user":
         msgs.pop()
     msgs.append({"role": "user", "content": user_text[:800]})
     msgs.append({"role": "assistant", "content": reply[:1500]})
-    if len(msgs) > MAX_MSGS:
-        msgs = msgs[-MAX_MSGS:]
-    key = f"{KEY_PREFIX}{user_id}"
-    c = _get()
-    if c:
-        c.setex(key, TTL_SEC, json.dumps(msgs, ensure_ascii=False))
-    else:
-        _fallback[user_id] = msgs
+
+    summary = st.get("summary", "")
+    if len(msgs) > RAW_LIMIT:
+        evicted, keep = msgs[:-RAW_LIMIT], msgs[-RAW_LIMIT:]
+        summary = _compress(summary, evicted)
+        msgs = keep
+
+    _write(user_id, {"summary": summary, "msgs": msgs})
 
 
-def clear(user_id: int):
-    c = _get()
+def clear(user_id):
+    c = _client() if _redis else None
     if c:
-        c.delete(f"{KEY_PREFIX}{user_id}")
+        c.delete(_key(user_id))
     _fallback.pop(user_id, None)

@@ -114,9 +114,13 @@ class AgentService:
                 yield ev
             return
 
-        history = _history_messages(mem.load(user.user_id))
-        msgs = [{"role": "system", "content": _system_prompt()}]
-        msgs.extend(history)  # 当前对话长期记忆（此前轮次）
+        state = mem.load_state(user.user_id)
+        sys_content = _system_prompt()
+        if state["summary"]:
+            # 早期上下文已压缩成摘要，注入 system，避免无限增长
+            sys_content += f"\n\n【此前对话摘要】{state['summary']}"
+        msgs = [{"role": "system", "content": sys_content}]
+        msgs.extend(state["msgs"])  # 近期原文（最近几轮，保证指代细节）
         msgs.append({"role": "user", "content": f"已知车站：{station_line}\n\n用户请求：{user_text}"})
 
         rounds = 0
