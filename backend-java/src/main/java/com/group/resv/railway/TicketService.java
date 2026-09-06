@@ -30,6 +30,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -221,6 +222,14 @@ public class TicketService {
                 return orderView(existed.get());
             }
 
+            // 一人一票活跃占位（SETNX 原子准入，防并发“先查后写”重复下单）
+            String activeKey = RailwayKeys.active(user.userId(), trip.getId(), tc.getSeatClass());
+            Boolean acquired = redis.opsForValue().setIfAbsent(
+                    activeKey, "1", Duration.ofDays(30));
+            if (!Boolean.TRUE.equals(acquired)) {
+                throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
+            }
+
             // Lua 原子扣减；未预热先预热一次
             long left = stockService.decr(trip.getId(), tc.getSeatClass());
             if (left == -2) {
@@ -228,6 +237,7 @@ public class TicketService {
                 left = stockService.decr(trip.getId(), tc.getSeatClass());
             }
             if (left < 0) {
+                redis.delete(activeKey); // 没买到就释放占位
                 throw new BizException(409, "余票不足");
             }
 
@@ -247,7 +257,12 @@ public class TicketService {
             event.put("passengerId", passengerId == null ? "" : passengerId);
             event.put("passengerAge", passengerAge == null ? "" : String.valueOf(passengerAge));
             event.put("priceCents", String.valueOf(priceCents));
-            redis.opsForStream().add(RailwayKeys.orderStream(), event);
+            try {
+                redis.opsForStream().add(RailwayKeys.orderStream(), event);
+            } catch (RuntimeException e) {
+                redis.delete(activeKey); // 落库失败前释放占位，避免死锁
+                throw e;
+            }
 
             log.info("购票受理 requestId={} trip={} class={} type={} {}->{} user={}",
                     requestId, trip.getId(), tc.getSeatClass(), ticketType, from, to, user.userId());
@@ -303,6 +318,8 @@ public class TicketService {
         order.setCancelledAt(LocalDateTime.now());
         orderRepository.save(order);
         stockService.release(order.getTripId(), order.getSeatClass());
+        // 释放一人一票活跃占位，允许该用户之后重新购买同车次同席别
+        redis.delete(RailwayKeys.active(order.getUserId(), order.getTripId(), order.getSeatClass()));
         log.info("退票 requestId={} 余票已回补", requestId);
         return orderView(order);
     }
