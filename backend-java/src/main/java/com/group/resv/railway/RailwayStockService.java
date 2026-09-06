@@ -1,6 +1,8 @@
 package com.group.resv.railway;
 
+import com.group.resv.railway.domain.TicketOrder;
 import com.group.resv.railway.domain.TripClass;
+import com.group.resv.railway.repo.TicketOrderRepository;
 import com.group.resv.railway.repo.TripClassRepository;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -8,10 +10,12 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
- * 余票读写。规则：DB trip_class.totalSeats 是总席位，运行期余票只在 Redis 维护；
- * 未预热（key 缺失）时余票按全额显示。扣减用 Lua 保证原子，退票按余量回补。
+ * 余票读写。规则：DB trip_class.totalSeats 是总席位，运行期余票只在 Redis 维护。
+ * 预热按「总席位 - 未取消在售订单」回填，杜绝重启后把已售座位当成余票造成超卖；
+ * 扣减用 Lua 保证原子，退票按余量回补。
  */
 @Service
 public class RailwayStockService {
@@ -19,27 +23,36 @@ public class RailwayStockService {
     private final StringRedisTemplate redis;
     private final DefaultRedisScript<Long> stockDecrScript;
     private final TripClassRepository tripClassRepository;
+    private final TicketOrderRepository orderRepository;
 
     public RailwayStockService(StringRedisTemplate redis,
                                DefaultRedisScript<Long> stockDecrScript,
-                               TripClassRepository tripClassRepository) {
+                               TripClassRepository tripClassRepository,
+                               TicketOrderRepository orderRepository) {
         this.redis = redis;
         this.stockDecrScript = stockDecrScript;
         this.tripClassRepository = tripClassRepository;
+        this.orderRepository = orderRepository;
     }
 
-    /** 预热：把 DB 总席位写入 Redis（覆盖，等价“重新放票”）。 */
+    /**
+     * 预热/回填余票：remaining = totalSeats - 在售订单数(PAID+PENDING)，且不小于 0。
+     * 每次应用启动、或 key 缺失时调用，保证与已成交订单一致。
+     */
     public boolean preheat(Long tripId, String seatClass) {
-        return tripClassRepository.findByTripIdAndSeatClass(tripId, seatClass)
-                .map(tc -> {
-                    try {
-                        redis.opsForValue().set(RailwayKeys.stock(tripId, seatClass), String.valueOf(tc.getTotalSeats()));
-                        return true;
-                    } catch (Exception e) {
-                        return false;
-                    }
-                })
-                .orElse(false);
+        Optional<TripClass> tc = tripClassRepository.findByTripIdAndSeatClass(tripId, seatClass);
+        if (tc.isEmpty()) {
+            return false;
+        }
+        try {
+            long sold = orderRepository.countByTripIdAndSeatClassAndStatusIn(
+                    tripId, seatClass, Set.of(TicketOrder.PAID, TicketOrder.PENDING));
+            long remaining = Math.max(0L, tc.get().getTotalSeats() - sold);
+            redis.opsForValue().set(RailwayKeys.stock(tripId, seatClass), String.valueOf(remaining));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** 当前余票；未预热返回总席位。 */

@@ -19,4 +19,6 @@ public interface TicketOrderRepository extends JpaRepository<TicketOrder, Long> 
             Long userId, Long tripId, String seatClass, Collection<String> statuses);
 
     List<TicketOrder> findByStatusAndCreatedAtBefore(String status, java.time.LocalDateTime before);
+
+    long countByTripIdAndSeatClassAndStatusIn(Long tripId, String seatClass, Collection<String> statuses);
 }

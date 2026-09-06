@@ -37,4 +37,33 @@ public class TicketPolicy {
             throw new BizException(409, "您已购买该车次该席别车票，请勿重复购买");
         }
     }
+
+    /** 支付只允许从 PENDING 发生；PAID 视为幂等；CANCELLED/EXPIRED 一律拒绝。 */
+    public void ensurePayable(TicketOrder o) {
+        if (TicketOrder.PAID.equals(o.getStatus())) {
+            return; // 幂等
+        }
+        if (TicketOrder.CANCELLED.equals(o.getStatus())) {
+            throw new BizException(400, "订单已取消，无法支付");
+        }
+        if (TicketOrder.EXPIRED.equals(o.getStatus())) {
+            throw new BizException(400, "订单已过期，无法支付");
+        }
+        if (!TicketOrder.PENDING.equals(o.getStatus())) {
+            throw new BizException(400, "订单状态不允许支付");
+        }
+    }
+
+    /** 退票只允许从 PENDING/PAID 发生；CANCELLED 视为幂等；EXPIRED 已回补余票，禁止二次退票回补。 */
+    public void ensureCancellable(TicketOrder o) {
+        if (TicketOrder.CANCELLED.equals(o.getStatus())) {
+            return; // 幂等
+        }
+        if (TicketOrder.EXPIRED.equals(o.getStatus())) {
+            throw new BizException(400, "订单已过期（余票已回补），无需再退票");
+        }
+        if (!TicketOrder.PENDING.equals(o.getStatus()) && !TicketOrder.PAID.equals(o.getStatus())) {
+            throw new BizException(400, "订单状态不允许退票");
+        }
+    }
 }

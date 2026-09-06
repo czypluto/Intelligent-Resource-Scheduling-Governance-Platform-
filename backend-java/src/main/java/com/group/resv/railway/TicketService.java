@@ -259,9 +259,7 @@ public class TicketService {
     @Transactional
     public Map<String, Object> pay(String requestId, Long userId) {
         TicketOrder order = owned(requestId, userId);
-        if (TicketOrder.CANCELLED.equals(order.getStatus())) {
-            throw new BizException(400, "订单已取消，无法支付");
-        }
+        policy.ensurePayable(order);
         if (!TicketOrder.PAID.equals(order.getStatus())) {
             order.setStatus(TicketOrder.PAID);
             order.setPaidAt(LocalDateTime.now());
@@ -278,6 +276,7 @@ public class TicketService {
         if (TicketOrder.CANCELLED.equals(order.getStatus())) {
             return orderView(order); // 幂等
         }
+        policy.ensureCancellable(order); // EXPIRED 已回补过，禁止二次退票回补
         order.setStatus(TicketOrder.CANCELLED);
         order.setCancelledAt(LocalDateTime.now());
         orderRepository.save(order);
