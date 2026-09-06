@@ -4,19 +4,19 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..agent.orchestrator import AgentService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", tags=["智能助手"])
 
 _agent = AgentService()
 
 
 class ChatBody(BaseModel):
-    message: str
+    message: str = Field(min_length=1, description="用户自然语言请求")
 
 
 async def _stream(body: ChatBody):
@@ -35,7 +35,7 @@ async def _stream(body: ChatBody):
         yield "data: [DONE]\n\n"
 
 
-@router.post("/chat")
+@router.post("/chat", summary="对话", description="自然语言 -> 意图识别 -> 调 Java 查票/购票/订单，SSE 流式返回阶段事件")
 async def chat(body: ChatBody):
     return StreamingResponse(
         _stream(body),

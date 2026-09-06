@@ -36,3 +36,10 @@ def test_resolve_model_defaults_to_official_id():
     from app import config
     # 未设置时别名应落到官方带连字符 id；已设置 MODEL_ID_* 也应为 deepseek-v4-pro
     assert config.MODEL_IDS.get("deepseekv4pro") == "deepseek-v4-pro"
+
+
+def test_buy_trip_must_come_from_query_results():
+    rows = [{"tripId": 2, "trainCode": "G101"}]
+    assert orchestrator._is_known_trip(rows, 2) is True
+    assert orchestrator._is_known_trip(rows, 99) is False
+    assert orchestrator._is_known_trip(None, 2) is False

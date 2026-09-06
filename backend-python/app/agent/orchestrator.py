@@ -22,6 +22,13 @@ def _event(kind: str, text: str, task: str = "agent") -> dict:
     return {"kind": kind, "text": text, "model": config.resolve_model(task)}
 
 
+def _is_known_trip(rows, trip_id) -> bool:
+    """tripId 是否来自最近的查票结果（防模型臆造车次）。"""
+    if not rows:
+        return False
+    return any(r.get("tripId") == trip_id for r in rows)
+
+
 def _system_prompt() -> str:
     return (
         "你是铁路购票助手。今天是%s。查询用 query_tickets（站名+日期），下单用 buy_ticket（tripId 来自查询结果），"
@@ -33,6 +40,8 @@ def _system_prompt() -> str:
 class AgentService:
     def __init__(self) -> None:
         self._rag: Optional[RagStore] = None
+        # 最近一次查票结果（按用户），用于约束 buy_ticket 的 tripId 必须来自查询
+        self._rows: dict[int, list] = {}
 
     def _rag_store(self) -> Optional[RagStore]:
         if self._rag is None:
@@ -89,12 +98,17 @@ class AgentService:
                             args.get("from", ""), args.get("to", ""),
                             args.get("date", date.today().isoformat()),
                             args.get("seatClass"))
+                        self._rows[user.user_id] = rows
                         shown = True
                         acted = True
                         text = self._query_text(rows)
                         msgs.append({"role": "assistant", "content": f"查票结果：\n{text}"})
                         yield _event("result", text)
                     elif name == "buy_ticket":
+                        # 防臆造：tripId 必须来自用户最近的查票结果
+                        if not _is_known_trip(self._rows.get(user.user_id), args.get("tripId")):
+                            yield _event("error", "请先使用 query_tickets 查询车次，再从结果中选择要购买的车次。")
+                            return
                         r = await java_client.buy_ticket(
                             int(args["tripId"]), args["seatClass"], args["from"], args["to"])
                         shown = True
