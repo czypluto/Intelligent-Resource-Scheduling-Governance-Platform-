@@ -38,6 +38,13 @@ public class TicketPolicy {
         }
     }
 
+    /** 儿童票硬前置：年满6周岁且未满14周岁，否则拒绝（确定性规则，不靠模型）。 */
+    public void ensureChildEligible(Integer age) {
+        if (age == null || age < 6 || age >= 14) {
+            throw new BizException(400, "儿童票需年满6周岁且未满14周岁（当前年龄无效）");
+        }
+    }
+
     /** 支付只允许从 PENDING 发生；PAID 视为幂等；CANCELLED/EXPIRED 一律拒绝。 */
     public void ensurePayable(TicketOrder o) {
         if (TicketOrder.PAID.equals(o.getStatus())) {

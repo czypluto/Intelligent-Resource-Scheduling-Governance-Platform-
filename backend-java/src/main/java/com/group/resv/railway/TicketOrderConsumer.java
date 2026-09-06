@@ -120,6 +120,12 @@ public class TicketOrderConsumer implements ApplicationRunner {
         o.setUserId(Long.valueOf(str(body.get("userId"))));
         o.setTripId(Long.valueOf(str(body.get("tripId"))));
         o.setSeatClass(str(body.get("seatClass")));
+        String type = str(body.get("ticketType"));
+        o.setTicketType(type == null || type.isEmpty() ? "ADULT" : type);
+        String age = str(body.get("passengerAge"));
+        if (age != null && !age.isEmpty()) {
+            o.setPassengerAge(Integer.valueOf(age));
+        }
         o.setFromStation(str(body.get("from")));
         o.setToStation(str(body.get("to")));
         o.setPassengerName(str(body.get("passengerName")));

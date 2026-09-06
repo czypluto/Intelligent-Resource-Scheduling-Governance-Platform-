@@ -43,6 +43,12 @@ public class TicketOrder {
     @Column(name = "seat_class", nullable = false, length = 32)
     private String seatClass;
 
+    @Column(name = "ticket_type", nullable = false, length = 16)
+    private String ticketType = "ADULT";
+
+    @Column(name = "passenger_age")
+    private Integer passengerAge;
+
     @Column(name = "from_station", nullable = false, length = 64)
     private String fromStation;
 

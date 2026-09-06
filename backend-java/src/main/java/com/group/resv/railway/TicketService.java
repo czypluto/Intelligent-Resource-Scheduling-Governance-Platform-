@@ -136,7 +136,8 @@ public class TicketService {
             @NotNull(message = "出发站不能为空") Long fromStationId,
             @NotNull(message = "到达站不能为空") Long toStationId,
             Long contactId,
-            String requestId) {
+            String requestId,
+            String ticketType) {
     }
 
     public Map<String, Object> buy(AuthUser user, BuyRequest req) {
@@ -177,14 +178,26 @@ public class TicketService {
                 : contactRepository.findByIdAndUserId(req.contactId(), user.userId()).orElse(null);
         String passengerName;
         String passengerId;
+        Integer passengerAge;
         if (c != null) {
             passengerName = c.getName();
             passengerId = c.getIdNo();
+            passengerAge = c.getAge();
         } else {
             User u = userRepository.findById(user.userId())
                     .orElseThrow(() -> new BizException(404, "用户不存在"));
             passengerName = u.getName();
             passengerId = u.getIdNo();
+            passengerAge = u.getAge();
+        }
+
+        // 票种前置规则：儿童票须 6-14 周岁（确定性校验），票价半价；默认成人票
+        String ticketType = req.ticketType() == null || req.ticketType().isBlank()
+                ? "ADULT" : req.ticketType().toUpperCase();
+        long priceCents = tc.getPriceCents();
+        if ("CHILD".equals(ticketType)) {
+            policy.ensureChildEligible(passengerAge);
+            priceCents = tc.getPriceCents() / 2;
         }
 
         String orderNo = genOrderNo();
@@ -215,21 +228,24 @@ public class TicketService {
 
             String from = name(stops.get(fromIdx).getStationId());
             String to = name(stops.get(toIdx).getStationId());
-            // 写 Stream，异步落库（削峰）
-            redis.opsForStream().add(RailwayKeys.orderStream(), Map.of(
-                    "requestId", requestId,
-                    "orderNo", orderNo,
-                    "userId", String.valueOf(user.userId()),
-                    "tripId", String.valueOf(trip.getId()),
-                    "seatClass", tc.getSeatClass(),
-                    "from", from,
-                    "to", to,
-                    "passengerName", passengerName,
-                    "passengerId", passengerId == null ? "" : passengerId,
-                    "priceCents", String.valueOf(tc.getPriceCents())));
+            // 写 Stream，异步落库（削峰）；携带票种与年龄供消费端与审计使用
+            Map<String, Object> event = new HashMap<>();
+            event.put("requestId", requestId);
+            event.put("orderNo", orderNo);
+            event.put("userId", String.valueOf(user.userId()));
+            event.put("tripId", String.valueOf(trip.getId()));
+            event.put("seatClass", tc.getSeatClass());
+            event.put("ticketType", ticketType);
+            event.put("from", from);
+            event.put("to", to);
+            event.put("passengerName", passengerName);
+            event.put("passengerId", passengerId == null ? "" : passengerId);
+            event.put("passengerAge", passengerAge == null ? "" : String.valueOf(passengerAge));
+            event.put("priceCents", String.valueOf(priceCents));
+            redis.opsForStream().add(RailwayKeys.orderStream(), event);
 
-            log.info("购票受理 requestId={} trip={} class={} {}->{} user={}",
-                    requestId, trip.getId(), tc.getSeatClass(), from, to, user.userId());
+            log.info("购票受理 requestId={} trip={} class={} type={} {}->{} user={}",
+                    requestId, trip.getId(), tc.getSeatClass(), ticketType, from, to, user.userId());
 
             Map<String, Object> m = new HashMap<>();
             m.put("orderNo", orderNo);
@@ -240,7 +256,8 @@ public class TicketService {
                 m.put("trainCode", train.getCode());
             }
             m.put("seatClass", tc.getSeatClass());
-            m.put("priceCents", tc.getPriceCents());
+            m.put("ticketType", ticketType);
+            m.put("priceCents", priceCents);
             m.put("from", from);
             m.put("to", to);
             return m;
@@ -310,6 +327,8 @@ public class TicketService {
         m.put("requestId", o.getRequestId());
         m.put("tripId", o.getTripId());
         m.put("seatClass", o.getSeatClass());
+        m.put("ticketType", o.getTicketType());
+        m.put("passengerAge", o.getPassengerAge());
         m.put("from", o.getFromStation());
         m.put("to", o.getToStation());
         m.put("passengerName", o.getPassengerName());

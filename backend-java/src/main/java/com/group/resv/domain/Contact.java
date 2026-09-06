@@ -38,4 +38,7 @@ public class Contact {
 
     @Column(length = 32)
     private String phone;
+
+    /** 年龄（儿童票判定用） */
+    private Integer age;
 }

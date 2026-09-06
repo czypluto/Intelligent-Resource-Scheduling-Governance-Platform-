@@ -145,13 +145,20 @@ class AgentService:
                             "to": row["to"],
                             "date": row.get("travelDate"),
                             "trainCode": row.get("trainCode"),
+                            "ticketType": (args.get("ticketType") or "ADULT").upper(),
                         }
                         self._intents[user.user_id] = intent
                         shown = True
                         acted = True
-                        confirm = (f"请确认下单：{intent['trainCode']} {intent['date']} "
-                                   f"{intent['from']}→{intent['to']} {intent['seatClass']} "
-                                   f"¥{round(row.get('priceCents', 0) / 100)}。回复“确认”即出票。")
+                        base = (f"请确认下单：{intent['trainCode']} {intent['date']} "
+                                f"{intent['from']}→{intent['to']} {intent['seatClass']} "
+                                f"({intent['ticketType']}) 回复“确认”即出票。")
+                        if intent["ticketType"] in ("CHILD", "STUDENT"):
+                            rule = await self._rule_snippet(
+                                "儿童票" if intent["ticketType"] == "CHILD" else "学生票")
+                            if rule:
+                                base = f"下单前请核对规则：{rule[:180]}\n{base}"
+                        confirm = base
                         msgs.append({"role": "assistant", "content": confirm})
                         yield _event("confirm", confirm)
                         return
@@ -195,7 +202,8 @@ class AgentService:
         """用户确认后执行预填下单（确定性路径，不再让模型介入）。"""
         try:
             r = await java_client.buy_ticket(
-                int(intent["tripId"]), intent["seatClass"], intent["from"], intent["to"])
+                int(intent["tripId"]), intent["seatClass"], intent["from"], intent["to"],
+                ticket_type=intent.get("ticketType", "ADULT"))
         except java_client.JavaError as e:
             yield _event("error", e.msg)
             return
@@ -206,6 +214,18 @@ class AgentService:
                 f"金额 {r.get('priceCents')}分，状态 {r.get('status')}，订单号 {r.get('orderNo')}。"
                 f"回复“支付”完成付款。")
         yield _event("result", line)
+
+    async def _rule_snippet(self, keyword: str) -> str:
+        """RAG 取一条规则摘要，供下单确认前置（A 层：信息前置）。"""
+        rag = self._rag_store()
+        if rag and rag.enabled:
+            try:
+                hits = await rag.retrieve(keyword, department=current_user().department, top_k=1)
+                if hits:
+                    return hits[0].strip()
+            except Exception:  # noqa: BLE001
+                pass
+        return ""
 
     async def _rule_answer(self, user_text: str) -> AsyncIterator[dict]:
         rag = self._rag_store()

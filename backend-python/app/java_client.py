@@ -64,13 +64,15 @@ async def query_tickets(from_station: str, to_station: str, date: str, seat_clas
     return rows
 
 
-async def buy_ticket(trip_id: int, seat_class: str, from_station: str, to_station: str) -> dict:
+async def buy_ticket(trip_id: int, seat_class: str, from_station: str, to_station: str,
+                     ticket_type: str = "ADULT") -> dict:
     from_id, to_id = await _resolve_station(from_station), await _resolve_station(to_station)
     body = {
         "tripId": trip_id,
         "seatClass": seat_class,
         "fromStationId": from_id,
         "toStationId": to_id,
+        "ticketType": ticket_type or "ADULT",
     }
     return await _call("POST", "/api/ticket/buy", body)
 

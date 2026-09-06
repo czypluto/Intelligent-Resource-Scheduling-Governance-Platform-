@@ -58,7 +58,7 @@ public class UserController {
 
     // ---------- 常用联系人 ----------
 
-    public record ContactBody(String name, String idType, String idNo, String phone) {
+    public record ContactBody(String name, String idType, String idNo, String phone, Integer age) {
     }
 
     @GetMapping("/contacts")
@@ -77,6 +77,7 @@ public class UserController {
         c.setIdType(body.idType() == null ? "身份证" : body.idType());
         c.setIdNo(body.idNo());
         c.setPhone(body.phone());
+        c.setAge(body.age());
         return ApiResult.ok(contactRepository.save(c));
     }
 
@@ -88,6 +89,7 @@ public class UserController {
         if (body.idType() != null) c.setIdType(body.idType());
         if (body.idNo() != null) c.setIdNo(body.idNo());
         if (body.phone() != null) c.setPhone(body.phone());
+        if (body.age() != null) c.setAge(body.age());
         return ApiResult.ok(contactRepository.save(c));
     }
 

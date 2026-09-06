@@ -103,3 +103,9 @@ CREATE TABLE IF NOT EXISTS contact (
 
 -- 旧库迁移说明：本文件面向全新初始化。既有旧库若缺 update_time / idx_trip_date，
 -- 已通过手工执行等价 ALTER 补齐（见历史提交 0333e0f），无需重复执行。
+
+-- 儿童票前置规则支撑（旧库重复执行报 duplicate column 可忽略）
+ALTER TABLE contact ADD COLUMN age INT DEFAULT NULL COMMENT '年龄(儿童票判定)' AFTER phone;
+ALTER TABLE ticket_order
+    ADD COLUMN ticket_type VARCHAR(16) NOT NULL DEFAULT 'ADULT' COMMENT 'ADULT/CHILD/STUDENT' AFTER seat_class,
+    ADD COLUMN passenger_age INT DEFAULT NULL COMMENT '乘车人年龄快照(儿童票判定)' AFTER passenger_id;

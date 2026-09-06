@@ -30,12 +30,13 @@ def query_tickets_schema() -> dict:
 def buy_ticket_schema() -> dict:
     return _fn(
         "buy_ticket",
-        "为当前用户购买指定车次的一张票（购票前应先查票确认车次与余票）。",
+        "为当前用户购买指定车次的一张票（购票前应先查票确认车次与余票）。默认成人票；儿童请填 ticketType=CHILD，并会先核对儿童票规则。",
         {
             "tripId": {"type": "integer", "description": "车次记录 id（来自 query_tickets）"},
             "seatClass": {"type": "string", "description": "席别：二等座/一等座/商务座"},
             "from": {"type": "string", "description": "出发站名"},
             "to": {"type": "string", "description": "到达站名"},
+            "ticketType": {"type": "string", "description": "票种：ADULT(默认)/CHILD/STUDENT", "enum": ["ADULT", "CHILD", "STUDENT"]},
         },
         ["tripId", "seatClass", "from", "to"],
     )
