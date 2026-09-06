@@ -145,3 +145,7 @@ export async function chatHistoryDetail(session) {
 export async function chatHistoryReset() {
   return jfetch('/py-api/api/chat/history/reset', { method: 'POST' })
 }
+
+export async function chatHistoryDelete(session) {
+  return jfetch(`/py-api/api/chat/history/${encodeURIComponent(session)}`, { method: 'DELETE' })
+}

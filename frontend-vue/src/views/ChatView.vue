@@ -1,7 +1,7 @@
 <script setup>
 import { nextTick, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { chatHistoryDetail, chatHistoryList, chatHistoryReset, chatStream, clearToken } from '../api'
+import { chatHistoryDelete, chatHistoryDetail, chatHistoryList, chatHistoryReset, chatStream, clearToken } from '../api'
 
 const props = defineProps({
   user: { type: Object, required: true },
@@ -124,6 +124,19 @@ async function loadSession(s) {
   }
 }
 
+async function removeSession(s) {
+  try {
+    await chatHistoryDelete(s.id)
+    sessions.value = sessions.value.filter((x) => x.id !== s.id)
+    if (replayTitle.value === s.preview) {
+      replay.value = []
+      replayTitle.value = ''
+    }
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
 async function newConversation() {
   try {
     await chatHistoryReset()
@@ -195,16 +208,13 @@ async function newConversation() {
       <el-dialog v-model="historyVisible" title="历史回放" width="860px" top="6vh">
         <div class="hist">
           <div class="hist-list">
-            <el-button
-              v-for="s in sessions"
-              :key="s.id"
-              class="hist-item"
-              text
-              @click="loadSession(s)"
-            >
-              <div class="hist-t">{{ s.preview || s.id }}</div>
-              <div class="hist-m">{{ s.count }} 轮 · {{ new Date(s.startedAt * 1000).toLocaleString() }}</div>
-            </el-button>
+            <div v-for="s in sessions" :key="s.id" class="hist-item">
+              <button class="hist-load" @click="loadSession(s)">
+                <div class="hist-t">{{ s.preview || s.id }}</div>
+                <div class="hist-m">{{ s.count }} 轮 · {{ new Date(s.startedAt * 1000).toLocaleString() }}</div>
+              </button>
+              <el-button class="hist-del" size="small" type="danger" text @click.stop="removeSession(s)">删</el-button>
+            </div>
             <div v-if="!sessions.length" class="hist-empty">暂无历史对话</div>
           </div>
           <div class="hist-body">
@@ -356,14 +366,23 @@ async function newConversation() {
   padding-right: 8px;
 }
 .hist-item {
-  display: block;
-  height: auto;
-  white-space: normal;
-  margin-bottom: 8px;
-  padding: 8px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
   border: 1px solid var(--resv-line);
   border-radius: 4px;
-  width: 100%;
+  padding: 4px 6px;
+}
+.hist-load {
+  flex: 1;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.hist-del {
+  flex: none;
 }
 .hist-t {
   color: #2c3a4a;

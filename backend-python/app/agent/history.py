@@ -103,6 +103,21 @@ def list_sessions(user_id) -> list[dict]:
     return out
 
 
+def delete_session(user_id, session):
+    """删除单个历史会话文件；若删除的是当前会话，同时清当前指向。"""
+    p = _path(user_id, session)
+    if p.exists():
+        p.unlink()
+    if _read_current(user_id) == session:
+        d = {}
+        try:
+            d = json.loads(_CURRENT.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+        d.pop(str(user_id), None)
+        _CURRENT.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+
 def get_session(user_id, session) -> list[dict]:
     p = _path(user_id, session)
     if not p.exists():

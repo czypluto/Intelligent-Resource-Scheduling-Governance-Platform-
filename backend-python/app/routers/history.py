@@ -17,6 +17,12 @@ def detail(session: str):
     return {"messages": hist.get_session(current_user().user_id, session)}
 
 
+@router.delete("/{session}")
+def delete(session: str):
+    hist.delete_session(current_user().user_id, session)
+    return {"deleted": session}
+
+
 @router.post("/reset")
 def reset():
     """开新对话：新会话 + 清当前对话记忆。"""
