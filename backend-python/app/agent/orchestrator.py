@@ -112,8 +112,12 @@ class AgentService:
 
             if not out.tool_calls:
                 if shown:
-                    # 已给出工具结果，直接收尾，不再当规则问题处理
+                    # 已真正产出过结果，收尾时才允许这类话术
                     yield _event("answer", "以上是办理结果。如需继续下单/支付/退票，直接告诉我即可。")
+                elif any(a in user_text for a in ACTION_WORDS):
+                    # 办业务但模型没调工具（多半缺信息）：把模型的话还给用户，不再发占位/RAG
+                    text = out.content or "请补充需要办理的内容，例如出发地/到达地/日期/席别，或要操作的订单。"
+                    yield _event("answer", text)
                 else:
                     async for ev in self._rule_answer(user_text):
                         yield ev
@@ -198,8 +202,11 @@ class AgentService:
             # 是否还需要继续（如查完票再下单）：再问一次模型，让它决定收尾还是下单
             msgs.append({"role": "user",
                          "content": "基于以上结果：如果还需继续就调用下一个工具；已完事则仅用一句话回复用户。"})
-        # 循环结束：给一句收尾（兜底）
-        yield _event("answer", "已为您办理。需要支付或退票时告诉我订单号即可。")
+        # 循环结束兜底：只真出过结果才说“已办理”，否则引导补充信息
+        if shown:
+            yield _event("answer", "已为您办理。需要支付/退票/继续查票直接说即可。")
+        else:
+            yield _event("answer", "暂时没能自动办理，请补充需要办理的内容（车次/日期/席别或订单号）。")
 
     async def _commit_buy(self, user, intent) -> AsyncIterator[dict]:
         """用户确认后执行预填下单（确定性路径，不再让模型介入）。"""
