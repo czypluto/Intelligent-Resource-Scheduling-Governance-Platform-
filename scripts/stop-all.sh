@@ -16,7 +16,12 @@ stop_windows_port() {
 stop_windows_port 5173
 stop_windows_port 8080
 
-# WSL 侧：Python 主服务 + 嵌入服务
-wsl -e bash -lc 'pkill -f "uvicorn app.main" 2>/dev/null; pkill -f "uvicorn app.embed.server" 2>/dev/null; echo "[stop] WSL Python/嵌入已停"' 2>/dev/null || true
+# WSL 侧：Python 主服务 + 嵌入服务（按特征 pgrep 后 kill，排除自身 PID，避免 pkill 模式漏杀/自杀）
+wsl -e bash -lc '
+  for pat in "app.main:app" "app.embed.server:app"; do
+    pids=$(pgrep -f "$pat" | grep -vw "$$" || true)
+    if [ -n "$pids" ]; then kill $pids 2>/dev/null && echo "[stop] WSL $pat 已停"; fi
+  done
+' 2>/dev/null || true
 
 echo "Redis/MySQL 容器保留运行；如需一并停：cd infra && docker compose stop"
