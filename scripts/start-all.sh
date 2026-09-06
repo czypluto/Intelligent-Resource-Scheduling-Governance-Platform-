@@ -111,8 +111,8 @@ fi
 if wsl_up 8001 /health; then
   info "嵌入服务(WSL:8001) 已在运行，跳过"
 else
-  info "启动嵌入服务(WSL:8001)…"
-  (nohup wsl -e bash -lc 'cd backend-python && EMBED_MODEL_DIR=/home/cpluto/models/bge-m3 EMBED_MODEL=bge-m3 exec python3 -m uvicorn app.embed.server:app --host 0.0.0.0 --port 8001' > backend-python/wsl-embed.log 2>&1 &)
+  info "启动嵌入服务(WSL:8001, WeMM-2B int8 GPU)…"
+  (nohup wsl -e bash -lc 'cd backend-python && EMBED_MODEL=WeMM-Embedding-2B EMBED_MODEL_DIR=/home/cpluto/models/WeMM-Embedding-2B EMBED_OUTPUT_DIM=1024 exec /usr/bin/python3 -m uvicorn app.embed.server:app --host 0.0.0.0 --port 8001' > backend-python/wsl-embed.log 2>&1 &)
   wait_up 60 wsl_up 8001 /health \
     && info "嵌入服务(WSL:8001) 就绪" \
     || { info "嵌入服务启动失败，见 backend-python/wsl-embed.log"; exit 1; }
@@ -123,7 +123,7 @@ if wsl_up 8000 /api/health; then
   info "Python 主服务(WSL:8000) 已在运行，跳过"
 else
   info "启动 Python 主服务(WSL:8000)…"
-  (nohup wsl -e bash -lc 'gw=$(ip route | awk "/default/{print \$3}"); cd backend-python && JAVA_BASE="http://$gw:8080" exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend-python/wsl-uvicorn.log 2>&1 &)
+  (nohup wsl -e bash -lc 'gw=$(ip route | awk "/default/{print \$3}"); cd backend-python && JAVA_BASE="http://$gw:8080" exec /usr/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend-python/wsl-uvicorn.log 2>&1 &)
   wait_up 60 wsl_up 8000 /api/health \
     && info "Python 主服务(WSL:8000) 就绪" \
     || { info "Python 主服务启动失败，见 backend-python/wsl-uvicorn.log"; exit 1; }
