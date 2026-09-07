@@ -21,13 +21,26 @@ wait_up() { # wait_up <秒> <命令...>
 ensure_docker() {
   docker info >/dev/null 2>&1 && { info "Docker 引擎就绪"; return 0; }
 
-  local exe="" la="${LOCALAPPDATA:-}" pf="${PROGRAMFILES:-/c/Program Files}" home="${HOME:-}"
+  # 兜底探测：即便 shell 没带 HOME/LOCALAPPDATA，也从 cmd 读真实用户目录
+  local exe="" c="" pf="${PROGRAMFILES:-/c/Program Files}"
   for c in \
-    "$la/Programs/DockerDesktop/Docker Desktop.exe" \
-    "$home/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" \
+    "${LOCALAPPDATA:-}/Programs/DockerDesktop/Docker Desktop.exe" \
+    "$HOME/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" \
+    "$(cygpath -u "${USERPROFILE:-}" 2>/dev/null)/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" \
     "$pf/Docker/Docker/Docker Desktop.exe"; do
-    [ -f "$c" ] && { exe="$c"; break; }
+    [ -n "$c" ] && [ -f "$c" ] && { exe="$c"; break; }
   done
+  if [ -z "$exe" ]; then
+    c=$(cmd //c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r')
+    [ -n "$c" ] && c=$(cygpath -u "$c" 2>/dev/null || echo "$c")
+    if [ -n "$c" ] && [ -f "$c/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" ]; then
+      exe="$c/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe"
+    fi
+  fi
+  # 最后兜底：本机已确认的安装路径
+  if [ -z "$exe" ] && [ -f "/c/Users/24522/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" ]; then
+    exe="/c/Users/24522/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe"
+  fi
   if [ -z "$exe" ]; then
     info "未找到 Docker Desktop，请手动启动后重跑。"
     return 1
