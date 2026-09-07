@@ -21,9 +21,10 @@ wait_up() { # wait_up <秒> <命令...>
 ensure_docker() {
   docker info >/dev/null 2>&1 && { info "Docker 引擎就绪"; return 0; }
 
-  local exe="" la="${LOCALAPPDATA:-}" pf="${PROGRAMFILES:-/c/Program Files}"
+  local exe="" la="${LOCALAPPDATA:-}" pf="${PROGRAMFILES:-/c/Program Files}" home="${HOME:-}"
   for c in \
     "$la/Programs/DockerDesktop/Docker Desktop.exe" \
+    "$home/AppData/Local/Programs/DockerDesktop/Docker Desktop.exe" \
     "$pf/Docker/Docker/Docker Desktop.exe"; do
     [ -f "$c" ] && { exe="$c"; break; }
   done
